@@ -1,0 +1,50 @@
+{
+    "analog_rain_gauge": {
+        "name": "analog_rain_gauge",
+        "display_name": "analog-rain-gauge",
+        "type": "DEV",
+        "visibility": "PUB",
+        "allow_many": true,
+        "description": "Measure and report rainfall, events and historical activity",
+        "long_description": "README.md",
+        "depends_on": [],
+        "owner_org": "36a22e32-ab81-4a39-b400-869d532a052d",
+        "image_name": "ghcr.io/getdoover/analog_rain_gauge:latest",
+        "container_registry_profile": "88953909-e9c4-4f81-9ec0-56239d4b0a2e\n",
+        "build_args": "--platform linux/amd64,linux/arm64",
+        "config_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "",
+            "title": "Application Config",
+            "type": "object",
+            "properties": {
+                "digital_outputs_enabled": {
+                    "title": "Digital Outputs Enabled",
+                    "x-name": "digital_outputs_enabled",
+                    "x-hidden": false,
+                    "type": "boolean",
+                    "default": true
+                },
+                "a_funny_message": {
+                    "title": "A Funny Message",
+                    "x-name": "a_funny_message",
+                    "x-hidden": false,
+                    "type": "string"
+                },
+                "simulator_app_key": {
+                    "format": "doover-application",
+                    "title": "Simulator App Key",
+                    "x-name": "simulator_app_key",
+                    "x-hidden": false,
+                    "type": "string",
+                    "description": "The app key for the simulator"
+                }
+            },
+            "additionalElements": true,
+            "required": [
+                "a_funny_message",
+                "simulator_app_key"
+            ]
+        }
+    }
+}

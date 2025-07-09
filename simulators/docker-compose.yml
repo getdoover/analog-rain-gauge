@@ -3,24 +3,41 @@ services:
     image: spaneng/doover_device_agent:apps
     network_mode: host
 
-  sample_simulator:
-    build: ./sample
+  platform_iface:
+    image: spaneng/doover_platform_iface
+    network_mode: host
+    entrypoint: python3 -u platform_iface.py --type=sim
+
+  ananlog_rain_gauge_simulator:
+    build: analog_rain_gauge
     network_mode: host
     restart: unless-stopped
     depends_on:
-      - device_agent
+      device_agent:
+        condition: service_healthy
+#      platform_iface:
+#        condition: service_healthy
     environment:
       - APP_KEY=sim_app_key
+      - HEALTHCHECK_PORT=49201
+      - DDA_URI=192.168.0.53:50051
 
-  sample_application:
+  analog_rain_gauge:
     build: ../
     network_mode: host
     restart: unless-stopped
     depends_on:
-      - device_agent
-      - sample_simulator
+      device_agent:
+        condition: service_healthy
+#      platform_iface:
+#        condition: service_healthy
+      ananlog_rain_gauge_simulator:
+        condition: service_healthy
     environment:
       - APP_KEY=test_app_key
       - CONFIG_FP=/app_config.json
+      - HEALTHCHECK_PORT=49202
+      - DDA_URI=192.168.0.53:50051
     volumes:
       - ./app_config.json:/app_config.json
+      - /etc/localtime:/etc/localtime:ro

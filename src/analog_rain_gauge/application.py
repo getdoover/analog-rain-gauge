@@ -1,55 +1,120 @@
 import logging
-import time
+from datetime import datetime, timezone, timedelta
 
 from pydoover.docker import Application
-from pydoover import ui
 
 from .app_config import AnalogRainGaugeConfig
 from .app_ui import AnalogRainGaugeUI
-from .app_state import AnalogRainGaugeState
 
 log = logging.getLogger()
 
+
 class AnalogRainGaugeApplication(Application):
-    config: AnalogRainGaugeConfig  # not necessary, but helps your IDE provide autocomplete!
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.started: float = time.time()
-        self.ui: AnalogRainGaugeUI = None
-        self.state: AnalogRainGaugeState = None
+    config: AnalogRainGaugeConfig
+    ui: AnalogRainGaugeUI
 
     async def setup(self):
         self.ui = AnalogRainGaugeUI()
-        self.state = AnalogRainGaugeState()
         self.ui_manager.add_children(*self.ui.fetch())
 
-    async def main_loop(self):
-        log.info(f"State is: {self.state.state}")
+        events = await self.platform_iface.get_di_events_async(
+            self.config.input_pin.value,
+            edge="rising",
+            events_from=self.get_tag("last_pulse_io_board") or 0,
+        )
+        for event in events:
+            await self.on_gauge_pulse(event)
 
-        # a random value we set inside our simulator. Go check it out in simulators/sample!
-        random_value = self.get_tag("random_value", self.config.sim_app_key.value)
-        log.info("Random value from simulator: %s", random_value)
-
-        self.ui.update(
-            True,
-            random_value,
-            time.time() - self.started,
+        self.platform_iface.start_di_pulse_listener(
+            self.config.input_pin.value, self.on_gauge_pulse, "rising"
         )
 
-    @ui.callback("send_alert")
-    async def on_send_alert(self, new_value):
-        log.info(f"Sending alert: {self.ui.test_output.current_value}")
-        await self.publish_to_channel("significantAlerts", self.ui.test_output.current_value)
-        self.ui.send_alert.coerce(None)
+        # fixme: remove once the display name is set in the config properly
+        self.ui_manager.set_display_name("Rain Gauge")
 
-    @ui.callback("test_message")
-    async def on_text_parameter_change(self, new_value):
-        log.info(f"New value for test message: {new_value}")
-        # Set the value as an output to the corresponding variable is this case
-        self.ui.test_output.update(new_value)
+    async def main_loop(self):
+        await self.check_reset_total()
+        await self.check_reset_event()
+        await self.check_event_done()
+        await self.check_9am_reset()
 
-    @ui.callback("charge_mode")
-    async def on_state_command(self, new_value):
-        log.info(f"New value for state command: {new_value}")
+        if (
+            self.ui.event_started.current_value is None
+            and self.ui.since_event.current_value
+            >= self.config.event_rainfall_threshold.value
+        ):
+            await self.start_event()
+
+
+    async def check_9am_reset(self):
+        now = datetime.now(timezone.utc).astimezone()
+        last_9am_reset = self.get_tag("last_9am_reset")
+        if last_9am_reset:
+            as_dt = datetime.fromtimestamp(last_9am_reset, tz=now.tzinfo)
+            needs_reset = as_dt.date() < now.date() and now.hour > 9
+        else:
+            needs_reset = False
+
+        if needs_reset:
+            log.info("Resetting rainfall since 9am")
+            self.ui.since_9am.update(0)
+            await self.set_tag_async("last_9am_reset", now.timestamp())
+
+    async def on_gauge_pulse(self, *args, **kwargs):
+        log.info("Received pulse from rain gauge")
+        per_pulse = self.config.mm_per_pulse.value
+        self.ui.since_9am.update((self.ui.since_9am.current_value or 0) + per_pulse)
+        self.ui.since_event.update((self.ui.since_event.current_value or 0) + per_pulse)
+        self.ui.total_rainfall.update(
+            (self.ui.total_rainfall.current_value or 0) + per_pulse
+        )
+
+        # fixme: set this to the IO board time in ms or include time with the pulse event
+        await self.set_tag_async("last_pulse_io_board", 0)
+        await self.set_tag_async(
+            "last_pulse_dt", datetime.now(timezone.utc).timestamp()
+        )
+
+    async def start_event(self):
+        log.info("Starting new rainfall event")
+        now = datetime.now(timezone.utc).astimezone()
+        self.ui.event_started.update(f"{now:%a %I:%M%p} ({now.tzinfo.tzname(now)})")
+
+    async def check_event_done(self):
+        dt = self.get_tag("last_pulse_dt")
+        if not dt:
+            return
+        if (
+            self.ui.since_event.current_value
+            < self.config.event_rainfall_threshold.value
+        ):
+            log.info("Minimum threshold not met, skipping event")
+            return
+
+        last_pulse = datetime.fromtimestamp(dt, tz=timezone.utc)
+        if datetime.now(timezone.utc) - last_pulse > timedelta(
+            hours=self.config.event_completion_duration.value
+        ):
+            log.info("Event completed, resetting event rainfall")
+            await self.publish_to_channel(
+                "significantEvent",
+                f"Rainfall: {self.ui.since_event.current_value:.2f}mm in latest event.",
+            )
+
+            self.ui.since_event.update(0)
+            self.ui.event_started.update(None)
+            await self.set_tag_async("last_pulse_dt", None)
+
+    async def check_reset_total(self):
+        if self.ui.reset_total.current_value is True:
+            log.info("Resetting total rainfall")
+            self.ui.total_rainfall.update(0)
+            self.ui.reset_total.coerce(None)
+
+    async def check_reset_event(self):
+        if self.ui.reset_event.current_value is True:
+            log.info("Resetting event rainfall")
+            self.ui.since_event.update(0)
+            self.ui.event_started.update(None)
+
+            self.ui.reset_event.coerce(None)

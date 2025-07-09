@@ -1,4 +1,7 @@
 FROM spaneng/doover_device_base AS base_image
+LABEL com.doover.simulator="true"
+LABEL com.doover.managed="true"
+HEALTHCHECK --interval=30s --timeout=2s --start-period=5s CMD curl -f "127.0.0.1:$HEALTHCHECK_PORT" || exit 1
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.3 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy

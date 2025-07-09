@@ -1,6 +1,6 @@
 {
-    "simulator_app_key": "sim_app_key",
-    "digital_input_count": 1,
-    "digital_output_count": 2,
-    "a_funny_message": "yeeha"
+    "input_pin": 0,
+    "millimeters_per_pulse": 0.2,
+    "event_rainfall_threshold": 1.0,
+    "event_completion_duration": 24
 }

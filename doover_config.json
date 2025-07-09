@@ -1,50 +1,72 @@
 {
     "analog_rain_gauge": {
         "name": "analog_rain_gauge",
-        "display_name": "analog-rain-gauge",
+        "display_name": "Analog Rain Gauge",
         "type": "DEV",
         "visibility": "PUB",
-        "allow_many": true,
+        "allow_many": false,
         "description": "Measure and report rainfall, events and historical activity",
         "long_description": "README.md",
-        "depends_on": [],
+        "depends_on": [
+            "platform_interface"
+        ],
         "owner_org": "36a22e32-ab81-4a39-b400-869d532a052d",
-        "image_name": "ghcr.io/getdoover/analog_rain_gauge:latest",
-        "container_registry_profile": "88953909-e9c4-4f81-9ec0-56239d4b0a2e\n",
+        "image_name": "ghcr.io/getdoover/analog-rain-gauge:main",
+        "container_registry_profile": "88953909-e9c4-4f81-9ec0-56239d4b0a2e",
         "build_args": "--platform linux/amd64,linux/arm64",
+        "staging_config": {
+            "owner_org_key": "3ab6efaf-0081-420a-9b38-c64e250e69b1",
+            "container_registry_profile_key": "d216c926-f465-4ecb-9156-6841762d6606",
+            "key": "82053b28-0f65-49ff-b3f4-ba681ffd9bfe"
+        },
         "config_schema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "",
             "title": "Application Config",
             "type": "object",
             "properties": {
-                "digital_outputs_enabled": {
-                    "title": "Digital Outputs Enabled",
-                    "x-name": "digital_outputs_enabled",
+                "input_pin": {
+                    "title": "Input Pin",
+                    "x-name": "input_pin",
                     "x-hidden": false,
-                    "type": "boolean",
-                    "default": true
+                    "type": "integer",
+                    "description": "Input pin connected to the rain gauge.",
+                    "minimum": 0
                 },
-                "a_funny_message": {
-                    "title": "A Funny Message",
-                    "x-name": "a_funny_message",
+                "millimeters_per_pulse": {
+                    "title": "Millimeters per Pulse",
+                    "x-name": "millimeters_per_pulse",
                     "x-hidden": false,
-                    "type": "string"
+                    "type": "number",
+                    "description": "The number of millimeters of rain per pulse from the gauge.",
+                    "default": 0.2,
+                    "minimum": 0
                 },
-                "simulator_app_key": {
-                    "format": "doover-application",
-                    "title": "Simulator App Key",
-                    "x-name": "simulator_app_key",
+                "event_rainfall_threshold": {
+                    "title": "Event Rainfall Threshold",
+                    "x-name": "event_rainfall_threshold",
                     "x-hidden": false,
-                    "type": "string",
-                    "description": "The app key for the simulator"
+                    "type": "number",
+                    "description": "The amount of rainfall that triggers an event (mm).",
+                    "default": 1.0,
+                    "minimum": 0
+                },
+                "event_completion_duration": {
+                    "title": "Event Completion Duration",
+                    "x-name": "event_completion_duration",
+                    "x-hidden": false,
+                    "type": "integer",
+                    "description": "The numer of hours of no rainfall to consider an event finished.",
+                    "default": 24,
+                    "minimum": 0
                 }
             },
             "additionalElements": true,
             "required": [
-                "a_funny_message",
-                "simulator_app_key"
+                "input_pin"
             ]
-        }
+        },
+        "key": null,
+        "repo_branch": "main"
     }
 }

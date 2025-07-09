@@ -1,0 +1,11 @@
+services:
+  analog-rain-gauge:
+    image: ghcr.io/getdoover/analog-rain-gauge:main
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - APP_KEY=$APP_KEY
+      - HEALTHCHECK_PORT=$HEALTHCHECK_PORT
+    volumes:
+      # give access to the host's datetime info for correct local timestamps
+      - /etc/localtime:/etc/localtime:ro

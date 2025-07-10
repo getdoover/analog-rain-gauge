@@ -4,13 +4,13 @@ from pydoover import ui
 class AnalogRainGaugeUI:
     def __init__(self):
         self.since_9am = ui.NumericVariable(
-            "rainfall_since_9am", "Since 9am", precision=2
+            "rainfall_since_9am", "Since 9am (mm)", precision=2
         )
         self.since_event = ui.NumericVariable(
-            "rainfall_since_event", "Since Event Start", precision=2
+            "rainfall_since_event", "Since Event Start (mm)", precision=2
         )
         self.total_rainfall = ui.NumericVariable(
-            "total_rainfall", "Total Rainfall", precision=2
+            "total_rainfall", "Total Rainfall (mm)", precision=2
         )
 
 

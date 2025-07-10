@@ -13,11 +13,8 @@ class AnalogRainGaugeUI:
             "total_rainfall", "Total Rainfall (mm)", precision=2
         )
 
-
         self.event_started = ui.TextVariable("event_started", "Event Started")
-        self.reset_event = ui.Action(
-            "reset_event", "Reset Event", confirmation=True
-        )
+        self.reset_event = ui.Action("reset_event", "Reset Event", confirmation=True)
         self.reset_total = ui.Action(
             "reset_total", "Reset Total Rainfall", confirmation=True
         )
@@ -32,5 +29,14 @@ class AnalogRainGaugeUI:
             self.reset_total,
         )
 
-    def update(self):
-        pass
+    def update(
+        self,
+        since_9am: float,
+        since_event: float,
+        total_rainfall: float,
+        event_started: str,
+    ):
+        self.since_9am.update(since_9am)
+        self.since_event.update(since_event)
+        self.total_rainfall.update(total_rainfall)
+        self.event_started.update(event_started)

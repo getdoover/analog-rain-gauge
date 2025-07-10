@@ -25,6 +25,13 @@ class AnalogRainGaugeApplication(Application):
         for event in events:
             await self.on_gauge_pulse(event)
 
+        if self.get_tag("since_event") is None:
+            await self.set_tag_async("since_event", 0)
+        if self.get_tag("since_9am") is None:
+            await self.set_tag_async("since_9am", 0)
+        if self.get_tag("total_rainfall") is None:
+            await self.set_tag_async("total_rainfall", 0)
+
         self.platform_iface.start_di_pulse_listener(
             self.config.input_pin.value, self.on_gauge_pulse, "rising"
         )
@@ -45,6 +52,14 @@ class AnalogRainGaugeApplication(Application):
         ):
             await self.start_event()
 
+        event_started = self.get_tag("event_started")
+        ts = event_started and datetime.fromtimestamp(event_started).astimezone()
+        self.ui.update(
+            self.get_tag("since_9am"),
+            self.get_tag("since_event"),
+            self.get_tag("total_rainfall"),
+            event_started and f"{ts:%a %I:%M%p} ({ts.tzinfo.tzname(ts)})",
+        )
 
     async def check_9am_reset(self):
         now = datetime.now(timezone.utc).astimezone()
@@ -57,16 +72,16 @@ class AnalogRainGaugeApplication(Application):
 
         if needs_reset:
             log.info("Resetting rainfall since 9am")
-            self.ui.since_9am.update(0)
+            await self.set_tag_async("since_9am", 0)
             await self.set_tag_async("last_9am_reset", now.timestamp())
 
     async def on_gauge_pulse(self, *args, **kwargs):
         log.info("Received pulse from rain gauge")
         per_pulse = self.config.mm_per_pulse.value
-        self.ui.since_9am.update((self.ui.since_9am.current_value or 0) + per_pulse)
-        self.ui.since_event.update((self.ui.since_event.current_value or 0) + per_pulse)
-        self.ui.total_rainfall.update(
-            (self.ui.total_rainfall.current_value or 0) + per_pulse
+        await self.set_tag_async("since_9am", self.get_tag("since_9am") + per_pulse)
+        await self.set_tag_async("since_event", self.get_tag("since_event") + per_pulse)
+        await self.set_tag_async(
+            "total_rainfall", self.get_tag("total_rainfall") + per_pulse
         )
 
         # fixme: set this to the IO board time in ms or include time with the pulse event
@@ -78,7 +93,7 @@ class AnalogRainGaugeApplication(Application):
     async def start_event(self):
         log.info("Starting new rainfall event")
         now = datetime.now(timezone.utc).astimezone()
-        self.ui.event_started.update(f"{now:%a %I:%M%p} ({now.tzinfo.tzname(now)})")
+        await self.set_tag_async("event_started", now.timestamp())
 
     async def check_event_done(self):
         dt = self.get_tag("last_pulse_dt")
@@ -101,20 +116,20 @@ class AnalogRainGaugeApplication(Application):
                 f"Rainfall: {self.ui.since_event.current_value:.2f}mm in latest event.",
             )
 
-            self.ui.since_event.update(0)
-            self.ui.event_started.update(None)
+            await self.set_tag_async("since_event", 0)
+            await self.set_tag_async("event_started", None)
             await self.set_tag_async("last_pulse_dt", None)
 
     async def check_reset_total(self):
         if self.ui.reset_total.current_value is True:
             log.info("Resetting total rainfall")
-            self.ui.total_rainfall.update(0)
+            await self.set_tag_async("total_rainfall", 0)
             self.ui.reset_total.coerce(None)
 
     async def check_reset_event(self):
         if self.ui.reset_event.current_value is True:
             log.info("Resetting event rainfall")
-            self.ui.since_event.update(0)
-            self.ui.event_started.update(None)
+            await self.set_tag_async("since_event", 0)
+            await self.set_tag_async("event_started", None)
 
             self.ui.reset_event.coerce(None)

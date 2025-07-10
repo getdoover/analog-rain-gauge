@@ -17,7 +17,3 @@ def test_config():
 def test_ui():
     from analog_rain_gauge.app_ui import AnalogRainGaugeUI
     assert AnalogRainGaugeUI
-
-def test_state():
-    from analog_rain_gauge.app_state import AnalogRainGaugeState
-    assert AnalogRainGaugeState

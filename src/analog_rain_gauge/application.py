@@ -99,6 +99,9 @@ class AnalogRainGaugeApplication(Application):
         dt = self.get_tag("last_pulse_dt")
         if not dt:
             return
+        if self.ui.since_event.current_value is None:
+            return
+
         if (
             self.ui.since_event.current_value
             < self.config.event_rainfall_threshold.value

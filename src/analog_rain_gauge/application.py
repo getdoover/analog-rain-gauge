@@ -17,6 +17,13 @@ class AnalogRainGaugeApplication(Application):
         self.ui = AnalogRainGaugeUI()
         self.ui_manager.add_children(*self.ui.fetch())
 
+        if self.get_tag("since_event") is None:
+            await self.set_tag_async("since_event", 0)
+        if self.get_tag("since_9am") is None:
+            await self.set_tag_async("since_9am", 0)
+        if self.get_tag("total_rainfall") is None:
+            await self.set_tag_async("total_rainfall", 0)
+
         events = await self.platform_iface.get_di_events_async(
             self.config.input_pin.value,
             edge="rising",
@@ -24,13 +31,6 @@ class AnalogRainGaugeApplication(Application):
         )
         for event in events:
             await self.on_gauge_pulse(event)
-
-        if self.get_tag("since_event") is None:
-            await self.set_tag_async("since_event", 0)
-        if self.get_tag("since_9am") is None:
-            await self.set_tag_async("since_9am", 0)
-        if self.get_tag("total_rainfall") is None:
-            await self.set_tag_async("total_rainfall", 0)
 
         self.platform_iface.start_di_pulse_listener(
             self.config.input_pin.value, self.on_gauge_pulse, "rising"
@@ -46,8 +46,8 @@ class AnalogRainGaugeApplication(Application):
         await self.check_9am_reset()
 
         if (
-            self.ui.event_started.current_value is None
-            and self.ui.since_event.current_value
+            self.get_tag("event_started") is None
+            and self.get_tag("since_event")
             >= self.config.event_rainfall_threshold.value
         ):
             await self.start_event()

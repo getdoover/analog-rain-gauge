@@ -8,6 +8,10 @@ class AnalogRainGaugeConfig(config.Schema):
         self.input_pin = config.Integer(
             "Input Pin", description="Input pin connected to the rain gauge.", minimum=0
         )
+        self.output_pin = config.Integer(
+            "Output Pin", description="(Optional) Output DO output pin connected to the rain gauge.", minimum=0,
+            default=None
+        )
         self.mm_per_pulse = config.Number(
             "Millimeters per Pulse",
             description="The number of millimeters of rain per pulse from the gauge.",

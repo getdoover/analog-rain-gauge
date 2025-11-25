@@ -33,6 +33,15 @@
                     "description": "Input pin connected to the rain gauge.",
                     "minimum": 0
                 },
+                "output_pin": {
+                    "title": "Output Pin",
+                    "x-name": "output_pin",
+                    "x-hidden": false,
+                    "type": "integer",
+                    "description": "(Optional) Output DO output pin connected to the rain gauge.",
+                    "default": null,
+                    "minimum": 0
+                },
                 "millimeters_per_pulse": {
                     "title": "Millimeters per Pulse",
                     "x-name": "millimeters_per_pulse",

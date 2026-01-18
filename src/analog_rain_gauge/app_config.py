@@ -33,7 +33,8 @@ class AnalogRainGaugeConfig(config.Schema):
         )
 
 
+def export():
+    AnalogRainGaugeConfig().export(Path(__file__).parents[2] / "doover_config.json", "analog_rain_gauge")
+
 if __name__ == "__main__":
-    AnalogRainGaugeConfig().export(
-        Path(__file__).parents[2] / "doover_config.json", "analog_rain_gauge"
-    )
+    export()

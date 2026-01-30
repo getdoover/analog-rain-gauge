@@ -1,6 +1,6 @@
 services:
   analog-rain-gauge:
-    image: ghcr.io/getdoover/analog-rain-gauge:main
+    image: ghcr.io/getdoover/analog-rain-gauge:dv1
     restart: unless-stopped
     network_mode: host
     environment:

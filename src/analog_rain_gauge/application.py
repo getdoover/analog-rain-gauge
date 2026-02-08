@@ -14,6 +14,9 @@ class AnalogRainGaugeApplication(Application):
     ui: AnalogRainGaugeUI
 
     async def setup(self):
+
+        self.loop_target_period = 3.0
+
         self.ui = AnalogRainGaugeUI()
         self.ui_manager.add_children(*self.ui.fetch())
 
@@ -45,6 +48,8 @@ class AnalogRainGaugeApplication(Application):
         await self.check_event_done()
         await self.check_9am_reset()
 
+        await self.ensure_output_pin()
+
         if (
             self.get_tag("event_started") is None
             and self.get_tag("since_event")
@@ -60,6 +65,12 @@ class AnalogRainGaugeApplication(Application):
             self.get_tag("total_rainfall"),
             event_started and f"{ts:%a %I:%M%p} ({ts.tzinfo.tzname(ts)})",
         )
+
+    async def ensure_output_pin(self):
+        if self.config.output_pin.value is None:
+            log.debug("No output pin configured, skipping")
+            return
+        await self.platform_iface.set_do_async(self.config.output_pin.value, True)
 
     async def check_9am_reset(self):
         now = datetime.now(timezone.utc).astimezone()

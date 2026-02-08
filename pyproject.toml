@@ -10,6 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
+export-config = "analog_rain_gauge.app_config:export"
 doover-app-run = "analog_rain_gauge:main"
 
 [build-system]

@@ -14,7 +14,6 @@ class AnalogRainGaugeApplication(Application):
     ui: AnalogRainGaugeUI
 
     async def setup(self):
-
         self.loop_target_period = 3.0
 
         self.ui = AnalogRainGaugeUI()
@@ -26,6 +25,10 @@ class AnalogRainGaugeApplication(Application):
             await self.set_tag_async("since_9am", 0)
         if self.get_tag("total_rainfall") is None:
             await self.set_tag_async("total_rainfall", 0)
+        if self.get_tag("last_9am_reset") is None:
+            await self.set_tag_async(
+                "last_9am_reset", datetime.now(timezone.utc).astimezone().timestamp()
+            )
 
         events = await self.platform_iface.get_di_events_async(
             self.config.input_pin.value,

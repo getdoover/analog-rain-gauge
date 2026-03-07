@@ -62,11 +62,15 @@ class AnalogRainGaugeApplication(Application):
 
         event_started = self.get_tag("event_started")
         ts = event_started and datetime.fromtimestamp(event_started).astimezone()
+
+        intensity = self._calc_intensity()
+
         self.ui.update(
             self.get_tag("since_9am"),
             self.get_tag("since_event"),
             self.get_tag("total_rainfall"),
             event_started and f"{ts:%a %I:%M%p} ({ts.tzinfo.tzname(ts)})",
+            intensity,
         )
 
     async def ensure_output_pin(self):
@@ -85,7 +89,23 @@ class AnalogRainGaugeApplication(Application):
             needs_reset = False
 
         if needs_reset:
-            log.info("Resetting rainfall since 9am")
+            daily_total = self.get_tag("since_9am")
+            reset_date = as_dt.date().isoformat()
+            log.info(
+                "Resetting rainfall since 9am (%.2fmm on %s)", daily_total, reset_date
+            )
+
+            await self.device_agent.create_message(
+                self.app_key,
+                {
+                    "daily": True,
+                    "type": "daily",
+                    "date": reset_date,
+                    "total_mm": round(daily_total, 2),
+                    "timestamp": int(now.timestamp() * 1000),
+                },
+            )
+
             await self.set_tag_async("since_9am", 0)
             await self.set_tag_async("last_9am_reset", now.timestamp())
 
@@ -98,11 +118,33 @@ class AnalogRainGaugeApplication(Application):
             "total_rainfall", self.get_tag("total_rainfall") + per_pulse
         )
 
+        now = datetime.now(timezone.utc)
+        await self.device_agent.create_message(
+            self.app_key,
+            {
+                "pulse": True,
+                "type": "pulse",
+                "mm": per_pulse,
+                "timestamp": int(now.timestamp() * 1000),
+            },
+        )
+
         # fixme: set this to the IO board time in ms or include time with the pulse event
         await self.set_tag_async("last_pulse_io_board", 0)
-        await self.set_tag_async(
-            "last_pulse_dt", datetime.now(timezone.utc).timestamp()
-        )
+        await self.set_tag_async("last_pulse_dt", now.timestamp())
+
+    def _calc_intensity(self):
+        event_started = self.get_tag("event_started")
+        last_pulse_dt = self.get_tag("last_pulse_dt")
+        since_event = self.get_tag("since_event")
+
+        if not event_started or not last_pulse_dt or not since_event:
+            return 0.0
+
+        duration_hours = (last_pulse_dt - event_started) / 3600
+        if duration_hours <= 0:
+            return 0.0
+        return since_event / duration_hours
 
     async def start_event(self):
         log.info("Starting new rainfall event")
@@ -127,10 +169,31 @@ class AnalogRainGaugeApplication(Application):
         if datetime.now(timezone.utc) - last_pulse > timedelta(
             hours=self.config.event_completion_duration.value
         ):
+            event_total = self.ui.since_event.current_value
+            event_started = self.get_tag("event_started")
+            event_started_dt = datetime.fromtimestamp(event_started, tz=timezone.utc)
+            duration_hours = (last_pulse - event_started_dt).total_seconds() / 3600
+
             log.info("Event completed, resetting event rainfall")
             await self.publish_to_channel(
                 "significantEvent",
-                f"Rainfall: {self.ui.since_event.current_value:.2f}mm in latest event.",
+                f"Rainfall: {event_total:.2f}mm in latest event.",
+            )
+
+            await self.device_agent.create_message(
+                self.app_key,
+                {
+                    "event": True,
+                    "type": "event",
+                    "started": event_started_dt.astimezone().isoformat(),
+                    "ended": last_pulse.astimezone().isoformat(),
+                    "total_mm": round(event_total, 2),
+                    "duration_hours": round(duration_hours, 2),
+                    "intensity_mm_hr": round(
+                        event_total / max(duration_hours, 0.01), 2
+                    ),
+                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                },
             )
 
             await self.set_tag_async("since_event", 0)

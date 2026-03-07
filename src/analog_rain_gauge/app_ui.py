@@ -18,9 +18,23 @@ class AnalogRainGaugeUI:
         )
 
         self.event_started = ui.TextVariable("event_started", "Event Started")
-        self.reset_event = ui.Action("reset_event", "Reset Event", confirmation=True)
-        self.reset_total = ui.Action(
-            "reset_total", "Reset Total Rainfall", confirmation=True
+
+        self.set_total = ui.NumericParameter(
+            "set_total_rainfall",
+            "Set Total Rainfall (mm)",
+            min_val=0,
+            requires_confirm=True,
+        )
+
+        self.reset_event = ui.Action(
+            "reset_event", "Reset Event", requires_confirm=True
+        )
+
+        self.actions = ui.Submodule(
+            "rain_gauge_actions",
+            "Actions",
+            children=[self.set_total, self.reset_event],
+            is_collapsed=True,
         )
 
     def fetch(self):
@@ -30,8 +44,7 @@ class AnalogRainGaugeUI:
             self.total_rainfall,
             self.intensity,
             self.event_started,
-            self.reset_event,
-            self.reset_total,
+            self.actions,
         )
 
     def update(

@@ -1,0 +1,36 @@
+{
+  "name": "rainfall-widget",
+  "version": "1.0.0",
+  "description": "Rainfall bar chart widget for doover",
+  "main": "index.js",
+  "scripts": {
+    "build": "rsbuild build",
+    "start": "rsbuild build && serve -s assets/ -l 8001",
+    "watch": "rsbuild build --watch --mode development",
+    "serve": "serve -s assets/ -l 8001",
+    "publish": "rsbuild build && doover channel publish-file rainfall_widget assets/RainfallWidget.js --agent 155878683561725194 --profile dv2"
+  },
+  "author": "Doover Team",
+  "license": "ISC",
+  "dependencies": {
+    "@module-federation/enhanced": "^0.21.6",
+    "@module-federation/rsbuild-plugin": "^0.21.6",
+    "@rsbuild/core": "^1.6.14",
+    "@rsbuild/plugin-react": "^1.4.2",
+    "@rspack/cli": "^1.6.7",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@tanstack/react-query": "^5.90.21",
+    "@refinedev/core": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.0",
+    "serve": "^14.2.5",
+    "tailwindcss": "^4.0.0"
+  },
+  "devDependencies": {
+    "css-loader": "^6.8.1",
+    "style-loader": "^3.3.3",
+    "webpack": "^5.82.1",
+    "webpack-cli": "^5.1.1"
+  }
+}

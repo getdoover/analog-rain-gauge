@@ -2,9 +2,12 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from pydoover.docker import Application
+from pydoover.ui import RemoteComponent
 
 from .app_config import AnalogRainGaugeConfig
 from .app_ui import AnalogRainGaugeUI
+
+WIDGET_URL = "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js"
 
 log = logging.getLogger()
 
@@ -17,7 +20,15 @@ class AnalogRainGaugeApplication(Application):
         self.loop_target_period = 3.0
 
         self.ui = AnalogRainGaugeUI()
-        self.ui_manager.add_children(*self.ui.fetch())
+        self.ui_manager.add_children(
+            *self.ui.fetch(),
+            RemoteComponent(
+                name="RainfallChart",
+                display_name="Rainfall Chart",
+                component_url=WIDGET_URL,
+                app_key=self.app_key,
+            ),
+        )
 
         if self.get_tag("since_event") is None:
             await self.set_tag_async("since_event", 0)
@@ -46,7 +57,7 @@ class AnalogRainGaugeApplication(Application):
         self.ui_manager.set_display_name("Rain Gauge")
 
     async def main_loop(self):
-        await self.check_reset_total()
+        await self.check_set_total()
         await self.check_reset_event()
         await self.check_event_done()
         await self.check_9am_reset()
@@ -119,6 +130,8 @@ class AnalogRainGaugeApplication(Application):
         )
 
         now = datetime.now(timezone.utc)
+        await self.set_tag_async("prev_pulse_dt", self.get_tag("last_pulse_dt"))
+
         await self.device_agent.create_message(
             self.app_key,
             {
@@ -134,17 +147,16 @@ class AnalogRainGaugeApplication(Application):
         await self.set_tag_async("last_pulse_dt", now.timestamp())
 
     def _calc_intensity(self):
-        event_started = self.get_tag("event_started")
-        last_pulse_dt = self.get_tag("last_pulse_dt")
-        since_event = self.get_tag("since_event")
+        """Calculate rain intensity (mm/hr) based on time between last 2 pulses."""
+        prev = self.get_tag("prev_pulse_dt")
+        last = self.get_tag("last_pulse_dt")
 
-        if not event_started or not last_pulse_dt or not since_event:
+        if not prev or not last or last <= prev:
             return 0.0
 
-        duration_hours = (last_pulse_dt - event_started) / 3600
-        if duration_hours <= 0:
-            return 0.0
-        return since_event / duration_hours
+        gap_hours = (last - prev) / 3600
+        per_pulse = self.config.mm_per_pulse.value
+        return per_pulse / gap_hours
 
     async def start_event(self):
         log.info("Starting new rainfall event")
@@ -200,11 +212,12 @@ class AnalogRainGaugeApplication(Application):
             await self.set_tag_async("event_started", None)
             await self.set_tag_async("last_pulse_dt", None)
 
-    async def check_reset_total(self):
-        if self.ui.reset_total.current_value is True:
-            log.info("Resetting total rainfall")
-            await self.set_tag_async("total_rainfall", 0)
-            self.ui.reset_total.coerce(None)
+    async def check_set_total(self):
+        val = self.ui.set_total.current_value
+        if val is not None:
+            log.info("Setting total rainfall to %.2f", val)
+            await self.set_tag_async("total_rainfall", val)
+            self.ui.set_total.coerce(None)
 
     async def check_reset_event(self):
         if self.ui.reset_event.current_value is True:

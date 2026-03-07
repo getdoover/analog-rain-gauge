@@ -1,8 +1,17 @@
 from pydoover import ui
 
+WIDGET_URL = "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js"
+
 
 class AnalogRainGaugeUI:
-    def __init__(self):
+    def __init__(self, app_key: str):
+        self.widget = ui.RemoteComponent(
+            name="RainfallChart",
+            display_name="Rainfall Chart",
+            component_url=WIDGET_URL,
+            app_key=app_key,
+        )
+
         self.since_9am = ui.NumericVariable(
             "rainfall_since_9am", "Since 9am (mm)", precision=2
         )
@@ -39,6 +48,7 @@ class AnalogRainGaugeUI:
 
     def fetch(self):
         return (
+            self.widget,
             self.since_9am,
             self.since_event,
             self.total_rainfall,

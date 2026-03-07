@@ -7,8 +7,6 @@ from pydoover.ui import RemoteComponent
 from .app_config import AnalogRainGaugeConfig
 from .app_ui import AnalogRainGaugeUI
 
-WIDGET_URL = "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js"
-
 log = logging.getLogger()
 
 
@@ -19,15 +17,9 @@ class AnalogRainGaugeApplication(Application):
     async def setup(self):
         self.loop_target_period = 3.0
 
-        self.ui = AnalogRainGaugeUI()
+        self.ui = AnalogRainGaugeUI(self.app_key)
         self.ui_manager.add_children(
             *self.ui.fetch(),
-            RemoteComponent(
-                name="RainfallChart",
-                display_name="Rainfall Chart",
-                component_url=WIDGET_URL,
-                app_key=self.app_key,
-            ),
         )
 
         if self.get_tag("since_event") is None:

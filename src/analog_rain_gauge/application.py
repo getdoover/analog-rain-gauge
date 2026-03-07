@@ -176,8 +176,8 @@ class AnalogRainGaugeApplication(Application):
 
             log.info("Event completed, resetting event rainfall")
             await self.publish_to_channel(
-                "significantEvent",
-                f"Rainfall: {event_total:.2f}mm in latest event.",
+                "notifications",
+                {"message": f"Rainfall: {event_total:.2f}mm in latest event."},
             )
 
             await self.device_agent.create_message(

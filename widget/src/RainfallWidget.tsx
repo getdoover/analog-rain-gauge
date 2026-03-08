@@ -1,7 +1,7 @@
 import "./styles.css";
 import {useState, useMemo, useEffect} from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
-import {useChannelMessages} from "customer_site/hooks";
+import {useChannelMessages, useAgentChannel} from "customer_site/hooks";
 import {useRemoteParams} from "customer_site/useRemoteParams";
 import {
   BarChart,
@@ -46,6 +46,21 @@ function normalizeMessage(msg: any): ChannelMessage | null {
   return null;
 }
 
+function normalizeMessages(data: any, typeFilter: string): ChannelMessage[] {
+  if (!data?.pages) return [];
+  const msgs: ChannelMessage[] = [];
+  for (const page of data.pages) {
+    if (!page) continue;
+    for (const msg of page) {
+      const normalized = normalizeMessage(msg);
+      if (normalized && normalized.data.type === typeFilter) {
+        msgs.push(normalized);
+      }
+    }
+  }
+  return msgs;
+}
+
 interface ChartBucket {
   label: string;
   mm: number;
@@ -63,7 +78,13 @@ interface UiRemoteComponentRainfall {
   app_key: string;
 }
 
-type Tab = "today" | "month" | "year" | "annual";
+type Tab = "hourly" | "month" | "year" | "annual";
+
+interface SelectedDay {
+  year: number;
+  month: number; // 0-indexed
+  day: number;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +116,17 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
+function getDayWindow(day: SelectedDay | null): { start9am: Date; end: Date } {
+  if (!day || isToday(day)) {
+    const start9am = getLocalDate9am();
+    return { start9am, end: new Date() };
+  }
+  const start9am = new Date(day.year, day.month, day.day, 9, 0, 0, 0);
+  const end = new Date(start9am);
+  end.setDate(end.getDate() + 1);
+  return { start9am, end };
+}
+
 const COMPARE_COLORS = [
   "var(--primary)",
   "steelblue",
@@ -106,26 +138,50 @@ const COMPARE_COLORS = [
   "lightcoral",
 ];
 
+function isToday(day: SelectedDay | null): boolean {
+  if (!day) return true;
+  const now = new Date();
+  return day.year === now.getFullYear() && day.month === now.getMonth() && day.day === now.getDate();
+}
+
+function formatDayLabel(day: SelectedDay): string {
+  return `${day.day} ${MONTH_NAMES[day.month]} ${day.year}`;
+}
+
 // ---------------------------------------------------------------------------
 // Bucketing functions
 // ---------------------------------------------------------------------------
 
-function bucketTodayByHour(messages: ChannelMessage[]): ChartBucket[] {
-  const start9am = getLocalDate9am();
-  const now = new Date();
+function bucketDayByHour(
+  messages: ChannelMessage[],
+  selectedDay: SelectedDay | null,
+): ChartBucket[] {
+  const viewingToday = isToday(selectedDay);
+
+  let start9am: Date;
+  let end: Date;
+
+  if (viewingToday) {
+    start9am = getLocalDate9am();
+    end = new Date();
+  } else {
+    start9am = new Date(selectedDay!.year, selectedDay!.month, selectedDay!.day, 9, 0, 0, 0);
+    end = new Date(start9am);
+    end.setDate(end.getDate() + 1); // next day 9am
+  }
 
   const buckets: Map<number, number> = new Map();
   const cursor = new Date(start9am);
-  while (cursor <= now) {
+  while (cursor <= end) {
     buckets.set(cursor.getHours(), 0);
     cursor.setHours(cursor.getHours() + 1);
   }
 
-  const start9amMs = start9am.getTime();
+  const startMs = start9am.getTime();
+  const endMs = end.getTime();
   for (const msg of messages) {
-    if (msg.data.type !== "pulse") continue;
     const ts = msg.data.timestamp;
-    if (ts < start9amMs) continue;
+    if (ts < startMs || ts > endMs) continue;
 
     const d = new Date(ts);
     const h = d.getHours();
@@ -136,7 +192,7 @@ function bucketTodayByHour(messages: ChannelMessage[]): ChartBucket[] {
 
   const result: ChartBucket[] = [];
   const iter = new Date(start9am);
-  while (iter <= now) {
+  while (iter <= end) {
     const h = iter.getHours();
     result.push({
       label: formatHour(h),
@@ -151,6 +207,7 @@ function bucketMonthByDay(
   messages: ChannelMessage[],
   year: number,
   month: number,
+  todayMm?: number,
 ): ChartBucket[] {
   const now = new Date();
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
@@ -163,23 +220,16 @@ function bucketMonthByDay(
   }
 
   for (const msg of messages) {
-    if (msg.data.type !== "daily" || !msg.data.date) continue;
+    if (!msg.data.date) continue;
     const [y, m, d] = msg.data.date.split("-").map(Number);
     if (y === year && m === month + 1) {
       buckets.set(d, (buckets.get(d) || 0) + (msg.data.total_mm || 0));
     }
   }
 
-  if (isCurrentMonth) {
-    const start9am = getLocalDate9am();
-    const todayDate = start9am.getDate();
-    const start9amMs = start9am.getTime();
-    for (const msg of messages) {
-      if (msg.data.type !== "pulse") continue;
-      if (msg.data.timestamp >= start9amMs) {
-        buckets.set(todayDate, (buckets.get(todayDate) || 0) + (msg.data.mm || 0));
-      }
-    }
+  // Add today's live total from the since_9am tag
+  if (isCurrentMonth && todayMm != null) {
+    buckets.set(now.getDate(), (buckets.get(now.getDate()) || 0) + todayMm);
   }
 
   const result: ChartBucket[] = [];
@@ -198,33 +248,25 @@ function bucketMonthByDay(
 function getYearMonthlyTotals(
   messages: ChannelMessage[],
   year: number,
+  todayMm?: number,
 ): Map<number, number> {
   const now = new Date();
-  const isCurrentYear = year === now.getFullYear();
-
   const buckets: Map<number, number> = new Map();
   for (let m = 0; m <= 11; m++) {
     buckets.set(m, 0);
   }
 
   for (const msg of messages) {
-    if (msg.data.type !== "daily" || !msg.data.date) continue;
+    if (!msg.data.date) continue;
     const [y, m] = msg.data.date.split("-").map(Number);
     if (y === year) {
       buckets.set(m - 1, (buckets.get(m - 1) || 0) + (msg.data.total_mm || 0));
     }
   }
 
-  if (isCurrentYear) {
-    const start9am = getLocalDate9am();
-    const start9amMs = start9am.getTime();
-    const currentMonth = now.getMonth();
-    for (const msg of messages) {
-      if (msg.data.type !== "pulse") continue;
-      if (msg.data.timestamp >= start9amMs) {
-        buckets.set(currentMonth, (buckets.get(currentMonth) || 0) + (msg.data.mm || 0));
-      }
-    }
+  if (year === now.getFullYear() && todayMm != null) {
+    const cm = now.getMonth();
+    buckets.set(cm, (buckets.get(cm) || 0) + todayMm);
   }
 
   return buckets;
@@ -233,11 +275,12 @@ function getYearMonthlyTotals(
 function bucketYearByMonth(
   messages: ChannelMessage[],
   year: number,
+  todayMm?: number,
 ): ChartBucket[] {
   const now = new Date();
   const isCurrentYear = year === now.getFullYear();
   const lastMonth = isCurrentYear ? now.getMonth() : 11;
-  const buckets = getYearMonthlyTotals(messages, year);
+  const buckets = getYearMonthlyTotals(messages, year, todayMm);
 
   const result: ChartBucket[] = [];
   for (let m = 0; m <= lastMonth; m++) {
@@ -254,10 +297,11 @@ function bucketYearByMonth(
 function bucketYearCompare(
   messages: ChannelMessage[],
   years: number[],
+  todayMm?: number,
 ): {data: CompareChartBucket[]; keys: string[]} {
   const allBuckets = years.map((y) => ({
     key: String(y),
-    buckets: getYearMonthlyTotals(messages, y),
+    buckets: getYearMonthlyTotals(messages, y, todayMm),
   }));
 
   const result: CompareChartBucket[] = [];
@@ -274,12 +318,13 @@ function bucketYearCompare(
 function bucketMonthCompare(
   messages: ChannelMessage[],
   months: {year: number; month: number}[],
+  todayMm?: number,
 ): {data: CompareChartBucket[]; keys: string[]} {
   const maxDays = Math.max(...months.map((m) => new Date(m.year, m.month + 1, 0).getDate()));
   const keys = months.map((m) => `${MONTH_NAMES[m.month]} ${m.year}`);
 
   const allBuckets = months.map((m) => {
-    const data = bucketMonthByDay(messages, m.year, m.month);
+    const data = bucketMonthByDay(messages, m.year, m.month, todayMm);
     const map = new Map<number, number>();
     for (const d of data) {
       if (d.day != null) map.set(d.day, d.mm);
@@ -301,36 +346,27 @@ function bucketMonthCompare(
 function bucketAnnualTotals(
   messages: ChannelMessage[],
   years: number[],
+  todayMm?: number,
 ): ChartBucket[] {
   const now = new Date();
-  const start9am = getLocalDate9am();
-  const start9amMs = start9am.getTime();
-
   const buckets: Map<number, number> = new Map();
   for (const y of years) {
     buckets.set(y, 0);
   }
 
   for (const msg of messages) {
-    if (msg.data.type !== "daily" || !msg.data.date) continue;
+    if (!msg.data.date) continue;
     const y = parseInt(msg.data.date.split("-")[0], 10);
     if (buckets.has(y)) {
       buckets.set(y, (buckets.get(y) || 0) + (msg.data.total_mm || 0));
     }
   }
 
-  // Add today's live pulses to current year
   const currentYear = now.getFullYear();
-  if (buckets.has(currentYear)) {
-    for (const msg of messages) {
-      if (msg.data.type !== "pulse") continue;
-      if (msg.data.timestamp >= start9amMs) {
-        buckets.set(currentYear, (buckets.get(currentYear) || 0) + (msg.data.mm || 0));
-      }
-    }
+  if (buckets.has(currentYear) && todayMm != null) {
+    buckets.set(currentYear, (buckets.get(currentYear) || 0) + todayMm);
   }
 
-  // Sort ascending by year
   const sorted = [...years].sort((a, b) => a - b);
   return sorted.map((y) => ({
     label: String(y),
@@ -349,7 +385,7 @@ function getAvailableMonths(messages: ChannelMessage[]): {year: number; month: n
   set.add(`${now.getFullYear()}-${now.getMonth()}`);
 
   for (const msg of messages) {
-    if (msg.data.type === "daily" && msg.data.date) {
+    if (msg.data.date) {
       const [y, m] = msg.data.date.split("-").map(Number);
       set.add(`${y}-${m - 1}`);
     }
@@ -369,7 +405,7 @@ function getAvailableYears(messages: ChannelMessage[]): number[] {
   set.add(now.getFullYear());
 
   for (const msg of messages) {
-    if (msg.data.type === "daily" && msg.data.date) {
+    if (msg.data.date) {
       const y = parseInt(msg.data.date.split("-")[0], 10);
       set.add(y);
     }
@@ -529,7 +565,8 @@ function MultiSelect({
 function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}) {
   const {agentId} = useRemoteParams();
   const appKey = uiElement.app_key;
-  const [activeTab, setActiveTab] = useState<Tab>("today");
+  const [activeTab, setActiveTab] = useState<Tab>("hourly");
+  const [selectedDay, setSelectedDay] = useState<SelectedDay | null>(null);
 
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(
@@ -539,36 +576,68 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   const [compareYears, setCompareYears] = useState<string[]>([]);
   const [compareMonths, setCompareMonths] = useState<string[]>([]);
 
-  const {data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage} =
-    useChannelMessages({
-      agentId,
-      channelName: appKey,
-    });
+  // Get today's live rainfall from the ui_state channel
+  // fixme: swap this out for tag values when that gets done...
+  const uiState = useAgentChannel(agentId, "ui_state");
+  const todayMm: number | undefined =
+    (uiState.aggregate as any)?.state?.children?.[appKey]?.children?.rainfall_since_9am?.currentValue;
 
-  // Auto-fetch all pages
+  // Track which data types have been requested — sticky once enabled
+  const [pulsesEnabled, setPulsesEnabled] = useState(true); // hourly is the default tab
+  const [dailyEnabled, setDailyEnabled] = useState(false);
+
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+    if (activeTab === "hourly") setPulsesEnabled(true);
+    else setDailyEnabled(true);
+  }, [activeTab]);
 
-  const allMessages = useMemo(() => {
-    if (!data?.pages) return [];
-    const msgs: ChannelMessage[] = [];
-    for (const page of data.pages) {
-      if (!page) continue;
-      for (const msg of page) {
-        const normalized = normalizeMessage(msg);
-        if (normalized && (normalized.data.type === "pulse" || normalized.data.type === "daily")) {
-          msgs.push(normalized);
+  const activeChannel = {agentId, channelName: appKey};
+  const disabledChannel = {};
+
+  const pulseQuery = useChannelMessages(pulsesEnabled ? activeChannel : disabledChannel, ["pulse"], 100);
+  const dailyQuery = useChannelMessages(dailyEnabled ? activeChannel : disabledChannel, ["daily"], 100);
+
+  // Auto-fetch pages, but stop pulse fetching once we've covered the selected day
+  const dayStartMs = useMemo(() => getDayWindow(selectedDay).start9am.getTime(), [selectedDay]);
+
+  useEffect(() => {
+    if (activeTab === "hourly") {
+      if (pulseQuery.hasNextPage && !pulseQuery.isFetchingNextPage) {
+        // Check if the oldest fetched pulse is already before the day's start
+        const pages = pulseQuery.data?.pages;
+        if (pages && pages.length > 0) {
+          const lastPage = pages[pages.length - 1];
+          if (lastPage && lastPage.length > 0) {
+            const oldest = normalizeMessage(lastPage[lastPage.length - 1]);
+            if (oldest && oldest.data.timestamp < dayStartMs) {
+              return; // We've fetched past the start of this day
+            }
+          }
         }
+        pulseQuery.fetchNextPage();
+      }
+    } else {
+      if (dailyQuery.hasNextPage && !dailyQuery.isFetchingNextPage) {
+        dailyQuery.fetchNextPage();
       }
     }
-    return msgs;
-  }, [data]);
+  }, [
+    activeTab, dayStartMs,
+    pulseQuery.hasNextPage, pulseQuery.isFetchingNextPage, pulseQuery.data,
+    dailyQuery.hasNextPage, dailyQuery.isFetchingNextPage,
+  ]);
 
-  const availableMonths = useMemo(() => getAvailableMonths(allMessages), [allMessages]);
-  const availableYears = useMemo(() => getAvailableYears(allMessages), [allMessages]);
+  const pulseMessages = useMemo(
+    () => normalizeMessages(pulseQuery.data, "pulse"),
+    [pulseQuery.data],
+  );
+  const dailyMessages = useMemo(
+    () => normalizeMessages(dailyQuery.data, "daily"),
+    [dailyQuery.data],
+  );
+
+  const availableMonths = useMemo(() => getAvailableMonths(dailyMessages), [dailyMessages]);
+  const availableYears = useMemo(() => getAvailableYears(dailyMessages), [dailyMessages]);
 
   const monthOptions = useMemo(
     () => availableMonths.map((m) => `${m.year}-${m.month}`),
@@ -584,29 +653,27 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   const effectiveCompareYears = compareYears.filter((y) => yearOptions.includes(y) && y !== effectiveYear);
   const effectiveCompareMonths = compareMonths.filter((m) => monthOptions.includes(m) && m !== effectiveMonth);
 
-  // Single-series chart data (today, month, year without compare, annual)
   const chartData = useMemo(() => {
     switch (activeTab) {
-      case "today":
-        return bucketTodayByHour(allMessages);
+      case "hourly":
+        return bucketDayByHour(pulseMessages, selectedDay);
       case "month": {
         if (effectiveCompareMonths.length > 0) return [];
         const [y, m] = effectiveMonth.split("-").map(Number);
-        return bucketMonthByDay(allMessages, y, m);
+        return bucketMonthByDay(dailyMessages, y, m, todayMm);
       }
       case "year":
         if (effectiveCompareYears.length > 0) return [];
-        return bucketYearByMonth(allMessages, parseInt(effectiveYear, 10));
+        return bucketYearByMonth(dailyMessages, parseInt(effectiveYear, 10), todayMm);
       case "annual":
-        return bucketAnnualTotals(allMessages, availableYears);
+        return bucketAnnualTotals(dailyMessages, availableYears, todayMm);
     }
-  }, [allMessages, activeTab, effectiveMonth, effectiveYear, effectiveCompareYears, effectiveCompareMonths, availableYears]);
+  }, [pulseMessages, dailyMessages, activeTab, selectedDay, effectiveMonth, effectiveYear, effectiveCompareYears, effectiveCompareMonths, availableYears, todayMm]);
 
-  // Compare data for year or month tabs
   const compareData = useMemo(() => {
     if (activeTab === "year" && effectiveCompareYears.length > 0) {
       const allYears = [parseInt(effectiveYear, 10), ...effectiveCompareYears.map((y) => parseInt(y, 10))];
-      return bucketYearCompare(allMessages, allYears);
+      return bucketYearCompare(dailyMessages, allYears, todayMm);
     }
     if (activeTab === "month" && effectiveCompareMonths.length > 0) {
       const primary = effectiveMonth.split("-").map(Number);
@@ -617,10 +684,10 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
           return {year: y, month: mo};
         }),
       ];
-      return bucketMonthCompare(allMessages, allMonths);
+      return bucketMonthCompare(dailyMessages, allMonths, todayMm);
     }
     return null;
-  }, [allMessages, activeTab, effectiveYear, effectiveCompareYears, effectiveMonth, effectiveCompareMonths]);
+  }, [dailyMessages, activeTab, effectiveYear, effectiveCompareYears, effectiveMonth, effectiveCompareMonths, todayMm]);
 
   const total = useMemo(() => {
     if (compareData) {
@@ -648,16 +715,28 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
       setSelectedMonth(`${entry.year}-${entry.month}`);
       setActiveTab("month");
     } else if (activeTab === "month" && entry.year != null && entry.month != null && entry.day != null) {
-      const now = new Date();
-      if (entry.year === now.getFullYear() && entry.month === now.getMonth() && entry.day === now.getDate()) {
-        setActiveTab("today");
-      }
+      setSelectedDay({year: entry.year, month: entry.month, day: entry.day});
+      setActiveTab("hourly");
     }
   };
 
-  const stillLoading = isLoading || isFetchingNextPage;
+  const shiftDay = (offset: number) => {
+    const base = selectedDay && !isToday(selectedDay)
+      ? new Date(selectedDay.year, selectedDay.month, selectedDay.day)
+      : new Date();
+    base.setDate(base.getDate() + offset);
+    const shifted: SelectedDay = {year: base.getFullYear(), month: base.getMonth(), day: base.getDate()};
+    if (isToday(shifted)) {
+      setSelectedDay(null);
+    } else {
+      setSelectedDay(shifted);
+    }
+  };
 
-  if (isLoading && !data?.pages?.length) {
+  const activeQuery = activeTab === "hourly" ? pulseQuery : dailyQuery;
+  const stillLoading = activeQuery.isLoading || activeQuery.isFetchingNextPage;
+
+  if (activeQuery.isLoading && !activeQuery.data?.pages?.length) {
     return (
       <div className="p-4 text-sm text-muted-foreground">
         Loading rainfall data...
@@ -670,22 +749,36 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
     ? compareData.data.some((b) => Object.values(b).some((v) => typeof v === "number" && v > 0))
     : chartData.some((b) => b.mm > 0);
 
+  const hourlyLabel = selectedDay && !isToday(selectedDay)
+    ? formatDayLabel(selectedDay)
+    : "Today";
+
+  const tabs: {key: Tab; label: string}[] = [
+    {key: "hourly", label: "Hourly"},
+    {key: "month", label: "Daily"},
+    {key: "year", label: "Monthly"},
+    {key: "annual", label: "Annual"},
+  ];
+
   return (
     <div className="w-full p-4">
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-2">
-        {(["today", "month", "year", "annual"] as Tab[]).map((tab) => (
+        {tabs.map(({key, label}) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+            key={key}
+            onClick={() => {
+              setActiveTab(key);
+              if (key === "hourly") setSelectedDay(null);
+            }}
             className={
               "px-3 py-1 rounded-md text-xs font-medium select-none " +
-              (activeTab === tab
+              (activeTab === key
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted/50")
             }
           >
-            {tab === "today" ? "Today" : tab === "month" ? "Daily" : tab === "year" ? "Monthly" : "Annual"}
+            {label}
           </button>
         ))}
         <span className="ml-auto text-xs text-muted-foreground">
@@ -693,25 +786,35 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
         </span>
       </div>
 
-      {/* Period sub-selector + compare for month */}
+      {/* Hourly sub-header */}
+      {activeTab === "hourly" && (
+        <div className="flex items-center gap-2 mb-2 justify-center">
+          <button
+            onClick={() => shiftDay(-1)}
+            className="px-1.5 py-0.5 rounded text-xs text-muted-foreground hover:bg-muted/50 select-none"
+          >
+            &larr;
+          </button>
+          <span className="text-xs font-medium text-foreground min-w-[90px] text-center">{hourlyLabel}</span>
+          <button
+            onClick={() => shiftDay(1)}
+            disabled={isToday(selectedDay)}
+            className="px-1.5 py-0.5 rounded text-xs text-muted-foreground hover:bg-muted/50 disabled:opacity-30 disabled:cursor-default select-none"
+          >
+            &rarr;
+          </button>
+        </div>
+      )}
+
+      {/* Period sub-selector for month */}
       {activeTab === "month" && monthOptions.length > 0 && (
-        <div className="flex items-center justify-center gap-4 mb-2">
+        <div className="flex items-center justify-center mb-2">
           <PeriodSelector
             options={monthOptions}
             selected={effectiveMonth}
             onSelect={setSelectedMonth}
             format={formatMonthLabel}
           />
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">Compare:</span>
-            <MultiSelect
-              options={monthOptions.filter((m) => m !== effectiveMonth)}
-              selected={compareMonths}
-              onChange={setCompareMonths}
-              placeholder="None"
-              format={formatMonthLabel}
-            />
-          </div>
         </div>
       )}
 
@@ -801,7 +904,7 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
               tick={{fontSize: 11, fill: "var(--muted-foreground)"}}
               tickLine={false}
               axisLine={{stroke: "var(--border)"}}
-              interval={activeTab === "month" ? Math.max(Math.floor(chartData.length / 10), 0) : 0}
+              interval={chartData.length > 12 ? Math.max(Math.floor(chartData.length / 10), 0) : 0}
             />
             <YAxis
               tick={{fontSize: 11, fill: "var(--muted-foreground)"}}
@@ -821,10 +924,10 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
               maxBarSize={40}
               fill="var(--primary)"
               isAnimationActive={false}
-              cursor={activeTab !== "today" ? "pointer" : undefined}
-              onDoubleClick={(_data: any, index: number) => {
+              cursor={activeTab !== "hourly" ? "pointer" : undefined}
+              onDoubleClick={activeTab !== "hourly" ? (_data: any, index: number) => {
                 if (chartData[index]) handleBarDoubleClick(chartData[index]);
-              }}
+              } : undefined}
             />
           </BarChart>
         </ResponsiveContainer>

@@ -101,11 +101,12 @@ class AnalogRainGaugeApplication(Application):
             await self.device_agent.create_message(
                 self.app_key,
                 {
-                    "daily": True,
-                    "type": "daily",
-                    "date": reset_date,
-                    "total_mm": round(daily_total, 2),
-                    "timestamp": int(now.timestamp() * 1000),
+                    "daily": {
+                        "type": "daily",
+                        "date": reset_date,
+                        "total_mm": round(daily_total, 2),
+                        "timestamp": int(now.timestamp() * 1000),
+                    },
                 },
             )
 
@@ -127,10 +128,11 @@ class AnalogRainGaugeApplication(Application):
         await self.device_agent.create_message(
             self.app_key,
             {
-                "pulse": True,
-                "type": "pulse",
-                "mm": per_pulse,
-                "timestamp": int(now.timestamp() * 1000),
+                "pulse": {
+                    "type": "pulse",
+                    "mm": per_pulse,
+                    "timestamp": int(now.timestamp() * 1000),
+                },
             },
         )
 
@@ -187,16 +189,17 @@ class AnalogRainGaugeApplication(Application):
             await self.device_agent.create_message(
                 self.app_key,
                 {
-                    "event": True,
-                    "type": "event",
-                    "started": event_started_dt.astimezone().isoformat(),
-                    "ended": last_pulse.astimezone().isoformat(),
-                    "total_mm": round(event_total, 2),
-                    "duration_hours": round(duration_hours, 2),
-                    "intensity_mm_hr": round(
-                        event_total / max(duration_hours, 0.01), 2
-                    ),
-                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    "event": {
+                        "type": "event",
+                        "started": event_started_dt.astimezone().isoformat(),
+                        "ended": last_pulse.astimezone().isoformat(),
+                        "total_mm": round(event_total, 2),
+                        "duration_hours": round(duration_hours, 2),
+                        "intensity_mm_hr": round(
+                            event_total / max(duration_hours, 0.01), 2
+                        ),
+                        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    },
                 },
             )
 

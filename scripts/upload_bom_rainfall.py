@@ -114,11 +114,12 @@ def main():
     if args.dry_run:
         for row in rows[:5]:
             msg = {
-                "type": "daily",
-                "daily": True,
-                "date": row["date"],
-                "total_mm": row["total_mm"],
-                "timestamp": int(row["timestamp_dt"].timestamp() * 1000),
+                "daily": {
+                    "type": "daily",
+                    "date": row["date"],
+                    "total_mm": row["total_mm"],
+                    "timestamp": int(row["timestamp_dt"].timestamp() * 1000),
+                },
             }
             print(f"  {msg}")
         if len(rows) > 5:
@@ -137,11 +138,11 @@ def main():
             continue
 
         msg = {
-            "type": "daily",
-            "daily": True,
-            "date": row["date"],
-            "total_mm": row["total_mm"],
-            "timestamp": int(row["timestamp_dt"].timestamp() * 1000),
+            "daily": {
+                "date": row["date"],
+                "total_mm": row["total_mm"],
+                "timestamp": int(row["timestamp_dt"].timestamp() * 1000),
+            },
         }
 
         try:

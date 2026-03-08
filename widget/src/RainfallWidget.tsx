@@ -30,6 +30,22 @@ interface ChannelMessage {
   timestamp: number;
 }
 
+function normalizeMessage(msg: any): ChannelMessage | null {
+  if (!msg?.data) return null;
+  for (const type of ["pulse", "daily", "event"] as const) {
+    const inner = msg.data[type];
+    if (inner && typeof inner === "object") {
+      return {
+        ...msg,
+        data: { type, ...inner },
+      };
+    }
+  }
+  // Legacy format
+  if (msg.data.type) return msg as ChannelMessage;
+  return null;
+}
+
 interface ChartBucket {
   label: string;
   mm: number;
@@ -542,8 +558,9 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
     for (const page of data.pages) {
       if (!page) continue;
       for (const msg of page) {
-        if (msg?.data?.type === "pulse" || msg?.data?.type === "daily") {
-          msgs.push(msg as ChannelMessage);
+        const normalized = normalizeMessage(msg);
+        if (normalized && (normalized.data.type === "pulse" || normalized.data.type === "daily")) {
+          msgs.push(normalized);
         }
       }
     }

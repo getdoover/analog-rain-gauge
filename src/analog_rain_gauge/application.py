@@ -155,7 +155,7 @@ class AnalogRainGaugeApplication(Application):
             duration_hours = (last_pulse - event_started_dt).total_seconds() / 3600
 
             log.info("Event completed, resetting event rainfall")
-            await self.update_channel_aggregate(
+            await self.create_message(
                 "notifications",
                 {"message": f"Rainfall: {event_total:.2f}mm in latest event."},
             )

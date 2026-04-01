@@ -30,7 +30,7 @@ class AnalogRainGaugeApplication(Application):
         events = await self.platform_iface.fetch_di_events(
             int(self.config.input_pin.value),
             edge="rising",
-            events_from=self.tags.last_pulse_io_board.value,
+            events_from=int(self.tags.last_pulse_io_board.value),
         )
         for event in events:
             await self.on_gauge_pulse(event)

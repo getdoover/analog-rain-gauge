@@ -107,6 +107,115 @@
         "code_repo_id": null,
         "export_config_command": null,
         "run_command": null,
-        "lambda_arn": null
+        "lambda_arn": null,
+        "ui_schema": {
+            "displayString": "$config.app().APP_DISPLAY_NAME:string",
+            "hidden": "$config.app().hidden:boolean:false:boolean:false",
+            "position": "$config.app().position:number:50",
+            "icon": null,
+            "colour": null,
+            "defaultOpen": false,
+            "type": "uiApplication",
+            "name": "$config.app().APP_KEY",
+            "children": {
+                "rainfall_chart": {
+                    "name": "rainfall_chart",
+                    "type": "uiRemoteComponent",
+                    "displayString": "Rainfall Chart",
+                    "showActivity": true,
+                    "componentUrl": "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js",
+                    "position": 51,
+                    "hidden": false,
+                    "children": {}
+                },
+                "since_9am": {
+                    "name": "since_9am",
+                    "type": "uiVariable",
+                    "displayString": "Since 9am",
+                    "showActivity": true,
+                    "position": 52,
+                    "hidden": false,
+                    "units": "mm",
+                    "varType": "float",
+                    "currentValue": "$tag.app().since_9am:number:0",
+                    "decPrecision": 2
+                },
+                "since_event_start": {
+                    "name": "since_event_start",
+                    "type": "uiVariable",
+                    "displayString": "Since Event Start",
+                    "showActivity": true,
+                    "position": 53,
+                    "hidden": false,
+                    "units": "mm",
+                    "varType": "float",
+                    "currentValue": "$tag.app().since_event:number:0",
+                    "decPrecision": 2
+                },
+                "total_rainfall": {
+                    "name": "total_rainfall",
+                    "type": "uiVariable",
+                    "displayString": "Total Rainfall",
+                    "showActivity": true,
+                    "position": 54,
+                    "hidden": false,
+                    "units": "mm",
+                    "varType": "float",
+                    "currentValue": "$tag.app().total_rainfall:number:0",
+                    "decPrecision": 2
+                },
+                "rain_intensity": {
+                    "name": "rain_intensity",
+                    "type": "uiVariable",
+                    "displayString": "Rain Intensity",
+                    "showActivity": true,
+                    "position": 55,
+                    "hidden": false,
+                    "units": "mm/hr",
+                    "varType": "float",
+                    "currentValue": "$tag.app().intensity:number:0",
+                    "decPrecision": 2
+                },
+                "event_started": {
+                    "name": "event_started",
+                    "type": "uiTimestamp",
+                    "displayString": "Event Started",
+                    "showActivity": true,
+                    "position": 56,
+                    "hidden": false,
+                    "varType": "timestamp",
+                    "currentValue": "$tag.app().event_started:number:null"
+                },
+                "actions": {
+                    "name": "actions",
+                    "type": "uiSubmodule",
+                    "displayString": "Actions",
+                    "showActivity": true,
+                    "position": 59,
+                    "hidden": false,
+                    "children": {
+                        "set_total_rainfall": {
+                            "name": "set_total_rainfall",
+                            "type": "uiFloatInput",
+                            "displayString": "Set Total Rainfall",
+                            "position": 57,
+                            "hidden": false,
+                            "units": "mm",
+                            "requiresConfirm": true,
+                            "min": 0
+                        },
+                        "reset_event": {
+                            "name": "reset_event",
+                            "type": "uiButton",
+                            "displayString": "Reset Event",
+                            "position": 58,
+                            "hidden": false,
+                            "requiresConfirm": true
+                        }
+                    },
+                    "defaultOpen": false
+                }
+            }
+        }
     }
 }

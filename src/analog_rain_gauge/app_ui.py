@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydoover import ui
 
 from .app_tags import AnalogRainGaugeTags
@@ -5,7 +7,7 @@ from .app_tags import AnalogRainGaugeTags
 WIDGET_URL = "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js"
 
 
-class AnalogRainGaugeUI(ui.UI, display_name="Rain Gauge"):
+class AnalogRainGaugeUI(ui.UI):
     widget = ui.RemoteComponent(
         "Rainfall Chart",
         component_url=WIDGET_URL,
@@ -54,4 +56,11 @@ class AnalogRainGaugeUI(ui.UI, display_name="Rain Gauge"):
             ),
         ],
         is_collapsed=True,
+    )
+
+
+def export():
+    AnalogRainGaugeUI(None, None, None).export(
+        Path(__file__).parents[2] / "doover_config.json",
+        "analog_rain_gauge",
     )

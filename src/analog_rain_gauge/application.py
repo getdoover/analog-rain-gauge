@@ -131,7 +131,7 @@ class AnalogRainGaugeApplication(Application):
     async def start_event(self):
         log.info("Starting new rainfall event")
         now = datetime.now(timezone.utc).astimezone()
-        await self.tags.event_started.set(now.timestamp())
+        await self.tags.event_started.set(now.timestamp() * 1000)
 
     async def check_event_done(self):
         dt = self.tags.last_pulse_dt.value
@@ -151,7 +151,7 @@ class AnalogRainGaugeApplication(Application):
         ):
             event_total = since_event
             event_started = self.tags.event_started.value
-            event_started_dt = datetime.fromtimestamp(event_started, tz=timezone.utc)
+            event_started_dt = datetime.fromtimestamp(event_started / 1000.0, tz=timezone.utc)
             duration_hours = (last_pulse - event_started_dt).total_seconds() / 3600
 
             log.info("Event completed, resetting event rainfall")

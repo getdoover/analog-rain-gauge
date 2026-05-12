@@ -126,7 +126,10 @@
                     "componentUrl": "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js",
                     "position": 51,
                     "hidden": false,
-                    "children": {}
+                    "children": {},
+                    "scope": "RainfallWidget",
+                    "module": "./RainfallWidget",
+                    "app_key": "$config.app().APP_KEY"
                 },
                 "since_9am": {
                     "name": "since_9am",

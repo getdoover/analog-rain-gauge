@@ -11,6 +11,9 @@ class AnalogRainGaugeUI(ui.UI):
     widget = ui.RemoteComponent(
         "Rainfall Chart",
         component_url=WIDGET_URL,
+        scope="RainfallWidget",
+        module="./RainfallWidget",
+        app_key="$config.app().APP_KEY",
     )
 
     since_9am = ui.NumericVariable(

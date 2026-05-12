@@ -15,23 +15,8 @@ const mfConfig = createModuleFederationConfig({
     shared: {
         react: {singleton: true, requiredVersion: '^18.3.1', eager: true},
         'react-dom': {singleton: true, requiredVersion: '^18.3.1', eager: true},
-        'customer_site/hooks': {
-            singleton: true,
-            requiredVersion: false,
-        },
-        'customer_site/RemoteAccess': {
-            singleton: true,
-            requiredVersion: false,
-        },
-        'customer_site/queryClient': {
-            singleton: true,
-            requiredVersion: false,
-        },
-        '@refinedev/core': {
-            singleton: true,
-            eager: true,
-            requiredVersion: false,
-        },
+        // fixme: doover-js is bundled (not shared) so the widget gets >=0.4.9 —
+        // switch it back to a shared singleton once customer-site is on >0.4.9.
         '@tanstack/react-query': {
             singleton: true,
             eager: true,

@@ -1,8 +1,9 @@
 import "./styles.css";
 import {useState, useMemo, useEffect} from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
-import {useChannelMessages, useAgentChannel} from "customer_site/hooks";
 import {useRemoteParams} from "customer_site/useRemoteParams";
+import {peekDooverClient} from "doover-js";
+import {DooverProvider, useChannelMessages, useAgentChannel} from "doover-js/react";
 import {
   BarChart,
   Bar,
@@ -576,11 +577,10 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   const [compareYears, setCompareYears] = useState<string[]>([]);
   const [compareMonths, setCompareMonths] = useState<string[]>([]);
 
-  // Get today's live rainfall from the ui_state channel
-  // fixme: swap this out for tag values when that gets done...
-  const uiState = useAgentChannel(agentId, "ui_state");
+  // Get today's live rainfall from the app's `since_9am` tag value.
+  const tagValues = useAgentChannel(agentId, "tag_values");
   const todayMm: number | undefined =
-    (uiState.aggregate as any)?.state?.children?.[appKey]?.children?.rainfall_since_9am?.currentValue;
+    (tagValues.data as any)?.[appKey]?.since_9am;
 
   // Track which data types have been requested — sticky once enabled
   const [pulsesEnabled, setPulsesEnabled] = useState(true); // hourly is the default tab
@@ -592,10 +592,10 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   }, [activeTab]);
 
   const activeChannel = {agentId, channelName: appKey};
-  const disabledChannel = {};
+  const disabledChannel = {agentId: undefined, channelName: undefined};
 
-  const pulseQuery = useChannelMessages(pulsesEnabled ? activeChannel : disabledChannel, ["pulse"], 100);
-  const dailyQuery = useChannelMessages(dailyEnabled ? activeChannel : disabledChannel, ["daily"], 100);
+  const pulseQuery = useChannelMessages(pulsesEnabled ? activeChannel : disabledChannel, {fields: ["pulse"], limit: 500});
+  const dailyQuery = useChannelMessages(dailyEnabled ? activeChannel : disabledChannel, {fields: ["daily"], limit: 500});
 
   // Auto-fetch pages, but stop pulse fetching once we've covered the selected day
   const dayStartMs = useMemo(() => getDayWindow(selectedDay).start9am.getTime(), [selectedDay]);
@@ -941,9 +941,25 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
 // ---------------------------------------------------------------------------
 
 const RainfallWidget = (props: any) => {
+  // This widget bundles its own copy of doover-js (it isn't shared with the
+  // host — see rsbuild.config.ts), so it must establish its own DooverProvider
+  // wired to the host's live DooverClient. Relying on the host's own
+  // <DooverProvider> wouldn't work: that context belongs to the host's copy of
+  // doover-js, which our bundled hooks can't read. The QueryClient still comes
+  // from RemoteComponentWrapper (shared @tanstack/react-query singleton).
+  const dooverClient = peekDooverClient();
+  if (!dooverClient) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground">
+        doover-js client not initialised by the host page.
+      </div>
+    );
+  }
   return (
     <RemoteComponentWrapper>
-      <RainfallWidgetInner {...props} />
+      <DooverProvider client={dooverClient}>
+        <RainfallWidgetInner {...props} />
+      </DooverProvider>
     </RemoteComponentWrapper>
   );
 };

@@ -8,7 +8,7 @@
     "start": "rsbuild build && serve -s assets/ -l 8001",
     "watch": "rsbuild build --watch --mode development",
     "serve": "serve -s assets/ -l 8001",
-    "publish": "rsbuild build && doover channel publish-file rainfall_widget assets/RainfallWidget.js --agent 155878683561725194 --profile dv2"
+    "publish": "rsbuild build && doover channel publish-file rain_gauge_widget assets/RainfallWidget.js --agent 146005200488925453"
   },
   "author": "Doover Team",
   "license": "ISC",
@@ -20,7 +20,7 @@
     "@rspack/cli": "^1.6.7",
     "@tailwindcss/postcss": "^4.0.0",
     "@tanstack/react-query": "^5.90.21",
-    "@refinedev/core": "^4.0.0",
+    "doover-js": "^0.4.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.15.0",

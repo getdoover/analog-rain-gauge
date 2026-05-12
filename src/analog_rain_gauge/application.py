@@ -142,7 +142,7 @@ class AnalogRainGaugeApplication(Application):
             return
 
         if since_event < self.config.event_rainfall_threshold.value:
-            log.info("Minimum threshold not met, skipping event")
+            log.debug("Minimum threshold not met, skipping event")
             return
 
         last_pulse = datetime.fromtimestamp(dt, tz=timezone.utc)

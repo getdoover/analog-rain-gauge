@@ -1,5 +1,5 @@
 import "./styles.css";
-import {useState, useMemo, useEffect} from "react";
+import {useState, useMemo, useEffect, Component, type ReactNode} from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import {useRemoteParams} from "customer_site/useRemoteParams";
 import {peekDooverClient} from "doover-js";
@@ -736,10 +736,21 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   const activeQuery = activeTab === "hourly" ? pulseQuery : dailyQuery;
   const stillLoading = activeQuery.isLoading || activeQuery.isFetchingNextPage;
 
+  // --- TEMPORARY DIAGNOSTICS (remove once the deployed-widget issue is found) ---
+  const diag = (
+    <pre className="mb-2 p-2 text-[10px] leading-snug whitespace-pre-wrap break-all border border-amber-400 bg-amber-50 text-amber-900 rounded">
+{`agentId=${JSON.stringify(agentId)} appKey=${JSON.stringify(appKey)} tab=${activeTab}
+pulse: status=${pulseQuery.status} fetch=${pulseQuery.fetchStatus} on=${!!(pulsesEnabled && agentId && appKey)} pages=${pulseQuery.data?.pages?.length ?? 0} msgs=${pulseMessages.length} hasNext=${String(pulseQuery.hasNextPage)} err=${(pulseQuery.error as any)?.message ?? "-"}
+daily: status=${dailyQuery.status} fetch=${dailyQuery.fetchStatus} on=${!!(dailyEnabled && agentId && appKey)} pages=${dailyQuery.data?.pages?.length ?? 0} msgs=${dailyMessages.length} hasNext=${String(dailyQuery.hasNextPage)} err=${(dailyQuery.error as any)?.message ?? "-"}
+tags:  status=${tagValues.status} fetch=${tagValues.fetchStatus} todayMm=${todayMm ?? "-"} err=${(tagValues.error as any)?.message ?? "-"}`}
+    </pre>
+  );
+
   if (activeQuery.isLoading && !activeQuery.data?.pages?.length) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        Loading rainfall data...
+      <div className="p-4">
+        {diag}
+        <div className="text-sm text-muted-foreground">Loading rainfall data...</div>
       </div>
     );
   }
@@ -762,6 +773,7 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
 
   return (
     <div className="w-full p-4">
+      {diag}
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-2">
         {tabs.map(({key, label}) => (
@@ -940,6 +952,28 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
 // Wrapper
 // ---------------------------------------------------------------------------
 
+// --- TEMPORARY DIAGNOSTICS: surface render-time crashes on screen ----------
+class WidgetErrorBoundary extends Component<{children: ReactNode}, {error: Error | null}> {
+  state: {error: Error | null} = {error: null};
+  static getDerivedStateFromError(error: Error) {
+    return {error};
+  }
+  componentDidCatch(error: Error, info: unknown) {
+    // eslint-disable-next-line no-console
+    console.error("[RainfallWidget] render crashed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <pre className="p-4 text-[11px] whitespace-pre-wrap break-all text-red-700 bg-red-50 border border-red-300 rounded">
+{`RainfallWidget crashed: ${this.state.error.message}\n\n${this.state.error.stack ?? ""}`}
+        </pre>
+      );
+    }
+    return this.props.children as ReactNode;
+  }
+}
+
 const RainfallWidget = (props: any) => {
   // This widget bundles its own copy of doover-js (it isn't shared with the
   // host — see rsbuild.config.ts), so it must establish its own DooverProvider
@@ -948,19 +982,33 @@ const RainfallWidget = (props: any) => {
   // doover-js, which our bundled hooks can't read. The QueryClient still comes
   // from RemoteComponentWrapper (shared @tanstack/react-query singleton).
   const dooverClient = peekDooverClient();
+  const dooverGlobals =
+    typeof window !== "undefined"
+      ? Object.keys(window as object).filter((k) => k.toLowerCase().includes("doover"))
+      : [];
+  // eslint-disable-next-line no-console
+  console.log("[RainfallWidget] mount diagnostics:", {
+    hasDooverClient: !!dooverClient,
+    restConfig: (dooverClient as any)?.rest?.config ?? null,
+    dooverGlobals,
+    props,
+  });
+
   if (!dooverClient) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        doover-js client not initialised by the host page.
-      </div>
+      <pre className="p-4 text-[11px] whitespace-pre-wrap break-all text-red-700 bg-red-50 border border-red-300 rounded">
+{`RainfallWidget: peekDooverClient() returned null — the host hasn't initialised the doover-js singleton, or this bundle's doover-js isn't seeing the host's globalThis.\ndoover-ish window globals: ${JSON.stringify(dooverGlobals)}`}
+      </pre>
     );
   }
   return (
-    <RemoteComponentWrapper>
-      <DooverProvider client={dooverClient}>
-        <RainfallWidgetInner {...props} />
-      </DooverProvider>
-    </RemoteComponentWrapper>
+    <WidgetErrorBoundary>
+      <RemoteComponentWrapper>
+        <DooverProvider client={dooverClient}>
+          <RainfallWidgetInner {...props} />
+        </DooverProvider>
+      </RemoteComponentWrapper>
+    </WidgetErrorBoundary>
   );
 };
 

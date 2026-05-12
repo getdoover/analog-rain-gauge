@@ -109,12 +109,12 @@
         "run_command": null,
         "lambda_arn": null,
         "ui_schema": {
-            "displayString": "$config.app().APP_DISPLAY_NAME:string",
+            "displayString": "$config.app().APP_DISPLAY_NAME",
             "hidden": "$config.app().hidden:boolean:false:boolean:false",
-            "position": "$config.app().position:number:50",
+            "position": "$config.app().dv_app_position:number:100",
             "icon": null,
             "colour": null,
-            "defaultOpen": false,
+            "defaultOpen": "$config.app().dv_app_default_open:boolean",
             "type": "uiApplication",
             "name": "$config.app().APP_KEY",
             "children": {
@@ -201,6 +201,7 @@
                             "position": 57,
                             "hidden": false,
                             "units": "mm",
+                            "currentValue": "$cmds.app().set_total_rainfall",
                             "requiresConfirm": true,
                             "min": 0
                         },
@@ -210,6 +211,7 @@
                             "displayString": "Reset Event",
                             "position": 58,
                             "hidden": false,
+                            "currentValue": "$cmds.app().reset_event",
                             "requiresConfirm": true
                         }
                     },

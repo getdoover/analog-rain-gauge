@@ -10,6 +10,9 @@ from .app_ui import AnalogRainGaugeUI
 
 log = logging.getLogger()
 
+# ignore anything above this
+MAX_INTENSITY_MM_HR = 300
+
 
 class AnalogRainGaugeApplication(Application):
     config: AnalogRainGaugeConfig
@@ -27,7 +30,7 @@ class AnalogRainGaugeApplication(Application):
                 datetime.now(timezone.utc).astimezone().timestamp()
             )
 
-        events = await self.platform_iface.fetch_di_events(
+        _events_synced, events = await self.platform_iface.fetch_di_events(
             int(self.config.input_pin.value),
             edge="rising",
             events_from=int(self.tags.last_pulse_io_board.value),
@@ -126,7 +129,7 @@ class AnalogRainGaugeApplication(Application):
 
         gap_hours = (last - prev) / 3600
         per_pulse = self.config.mm_per_pulse.value
-        return per_pulse / gap_hours
+        return min(per_pulse / gap_hours, MAX_INTENSITY_MM_HR)
 
     async def start_event(self):
         log.info("Starting new rainfall event")

@@ -36,7 +36,11 @@ class AnalogRainGaugeApplication(Application):
             events_from=int(self.tags.last_pulse_io_board.value),
         )
         for event in events:
-            await self.on_gauge_pulse(event)
+            # `event.time` is the IO-board timestamp in ms; replay each pulse at
+            # its real time, not "now" (otherwise a buffered batch all lands in
+            # the restart hour and the intensity calc sees ~0ms gaps).
+            event_secs = getattr(event, "time", 0) / 1000 or None
+            await self.on_gauge_pulse(event_time=event_secs)
 
         self.platform_iface.start_di_pulse_listener(
             int(self.config.input_pin.value), self.on_gauge_pulse, "rising"
@@ -94,14 +98,21 @@ class AnalogRainGaugeApplication(Application):
             await self.tags.since_9am.set(0)
             await self.tags.last_9am_reset.set(now.timestamp())
 
-    async def on_gauge_pulse(self, *args, **kwargs):
+    async def on_gauge_pulse(self, *args, event_time: float | None = None, **kwargs):
         log.info("Received pulse from rain gauge")
         per_pulse = self.config.mm_per_pulse.value
         await self.tags.since_9am.set(self.tags.since_9am.value + per_pulse)
         await self.tags.since_event.set(self.tags.since_event.value + per_pulse)
         await self.tags.total_rainfall.set(self.tags.total_rainfall.value + per_pulse)
 
-        now = datetime.now(timezone.utc)
+        # Live pulses just happened, so "now" is right; replayed IO-board events
+        # carry their own timestamp (see setup()) so they don't all collapse
+        # onto restart-time and blow up the intensity calc.
+        pulse_secs = (
+            event_time
+            if event_time is not None
+            else datetime.now(timezone.utc).timestamp()
+        )
         await self.tags.prev_pulse_dt.set(self.tags.last_pulse_dt.value)
 
         await self.device_agent.create_message(
@@ -110,14 +121,16 @@ class AnalogRainGaugeApplication(Application):
                 "pulse": {
                     "type": "pulse",
                     "mm": per_pulse,
-                    "timestamp": int(now.timestamp() * 1000),
+                    "timestamp": int(pulse_secs * 1000),
                 },
             },
         )
 
-        # fixme: set this to the IO board time in ms or include time with the pulse event
-        await self.tags.last_pulse_io_board.set(0)
-        await self.tags.last_pulse_dt.set(now.timestamp())
+        # Track the last processed event time (ms) so the next restart's
+        # fetch_di_events(events_from=...) doesn't re-replay pulses we've
+        # already counted.
+        await self.tags.last_pulse_io_board.set(int(pulse_secs * 1000))
+        await self.tags.last_pulse_dt.set(pulse_secs)
 
     def _calc_intensity(self):
         """Calculate rain intensity (mm/hr) based on time between last 2 pulses."""
@@ -129,7 +142,13 @@ class AnalogRainGaugeApplication(Application):
 
         gap_hours = (last - prev) / 3600
         per_pulse = self.config.mm_per_pulse.value
-        return min(per_pulse / gap_hours, MAX_INTENSITY_MM_HR)
+        intensity = per_pulse / gap_hours
+        if intensity > MAX_INTENSITY_MM_HR:
+            # Pulses this close together aren't real rain — switch bounce, or a
+            # batch of buffered events replayed back-to-back at startup (we
+            # stamp pulses with wall-clock time, not the IO-board time). Ignore.
+            return 0.0
+        return intensity
 
     async def start_event(self):
         log.info("Starting new rainfall event")

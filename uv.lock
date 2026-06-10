@@ -147,7 +147,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pydoover", git = "https://github.com/getdoover/pydoover" },
+    { name = "pydoover", specifier = ">=1.4.2" },
     { name = "transitions", specifier = ">=0.9.2" },
 ]
 
@@ -764,11 +764,15 @@ wheels = [
 
 [[package]]
 name = "pydoover"
-version = "1.0.2"
-source = { git = "https://github.com/getdoover/pydoover#fa4fc0e67b7ded1e7c2f45c7a16b6d257bf49dd6" }
+version = "1.4.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/47/3896989d5843fbb3e54643e7e2ad1ddeea741b56f42f0f58a8d83c22b6a4/pydoover-1.4.2.tar.gz", hash = "sha256:155716204c62e0322b37d73e95ea012390fe714e2e7d5efaceaa5aa3426941b3", size = 538314, upload-time = "2026-06-10T01:05:13.357Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/66/cb36ffe82f421e6b4cf06807047a4a0c46cca738c688ccdc882ad5772875/pydoover-1.4.2-py3-none-any.whl", hash = "sha256:8dda2b8e2a5efa051358683a396af6d56cf716c35422dca4d9ff027c5f4b4929", size = 276879, upload-time = "2026-06-10T01:05:11.676Z" },
 ]
 
 [[package]]

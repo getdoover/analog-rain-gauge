@@ -124,6 +124,7 @@ class AnalogRainGaugeApplication(Application):
                     "timestamp": int(pulse_secs * 1000),
                 },
             },
+            timestamp=datetime.fromtimestamp(pulse_secs, tz=timezone.utc),
         )
 
         # Track the last processed event time (ms) so the next restart's

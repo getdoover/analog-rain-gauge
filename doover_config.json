@@ -15,9 +15,11 @@
         "container_registry_profile": "88953909-e9c4-4f81-9ec0-56239d4b0a2e",
         "build_args": "--platform linux/amd64,linux/arm64",
         "staging_config": {
+            "container_registry_profile_id": "7369503425484439552",
             "owner_org_key": "3ab6efaf-0081-420a-9b38-c64e250e69b1",
             "container_registry_profile_key": "d216c926-f465-4ecb-9156-6841762d6606",
-            "key": "82053b28-0f65-49ff-b3f4-ba681ffd9bfe"
+            "key": "82053b28-0f65-49ff-b3f4-ba681ffd9bfe",
+            "id": 190616652512001804
         },
         "config_schema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -101,8 +103,8 @@
         "repo_branch": "main",
         "lambda_config": {},
         "owner_org_id": null,
-        "container_registry_profile_id": "93955828574386692",
-        "id": "144012655370225164",
+        "container_registry_profile_id": 93955828574386692,
+        "id": 144012655370225164,
         "organisation_id": null,
         "code_repo_id": null,
         "export_config_command": null,
@@ -221,6 +223,10 @@
                     "defaultOpen": false
                 }
             }
-        }
+        },
+        "icon_url": null,
+        "banner_url": null,
+        "build_widget_command": null,
+        "export_ui_command": null
     }
 }

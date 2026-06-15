@@ -566,7 +566,7 @@ function MultiSelect({
 function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}) {
   const {agentId} = useRemoteParams();
   const appKey = uiElement.app_key;
-  const [activeTab, setActiveTab] = useState<Tab>("hourly");
+  const [activeTab, setActiveTab] = useState<Tab>("monthly");
   const [selectedDay, setSelectedDay] = useState<SelectedDay | null>(null);
 
   const now = new Date();

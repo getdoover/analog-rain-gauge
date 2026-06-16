@@ -228,5 +228,248 @@
         "banner_url": null,
         "build_widget_command": null,
         "export_ui_command": null
+    },
+    "analog_rain_gauge_dashboard": {
+        "name": "analog_rain_gauge_dashboard",
+        "display_name": "Rainfall Dashboard",
+        "type": "PRO",
+        "visibility": "PUB",
+        "allow_many": true,
+        "description": "Farm dashboard aggregating every Analog Rain Gauge it can see - farm average / wettest / driest, a per-gauge table, rainfall-over-time, and an interpolated rainfall heatmap over a satellite basemap.",
+        "long_description": "README.dashboard.md",
+        "depends_on": [],
+        "owner_org": "36a22e32-ab81-4a39-b400-869d532a052d",
+        "image_name": null,
+        "build_args": null,
+        "staging_config": {
+            "lambda_config": {
+                "Environment": {
+                    "Variables": {
+                        "DOOVER_DATA_ENDPOINT": "https://data.staging.udoover.com/api"
+                    }
+                },
+                "Runtime": "python3.13",
+                "Timeout": 300,
+                "Handler": "src.analog_rain_gauge_dashboard.handler",
+                "MemorySize": 128,
+                "Architectures": [
+                    "arm64"
+                ]
+            }
+        },
+        "config_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "",
+            "title": "$default",
+            "type": "object",
+            "properties": {
+                "dv_proc_extended_permissions": {
+                    "title": "Devices",
+                    "x-name": "dv_proc_extended_permissions",
+                    "x-hidden": false,
+                    "type": "object",
+                    "x-required": true,
+                    "description": "Give Permission to access devices.",
+                    "x-position": 0,
+                    "properties": {
+                        "devices": {
+                            "title": "Devices",
+                            "x-name": "devices",
+                            "x-hidden": false,
+                            "type": "array",
+                            "x-required": true,
+                            "description": "List of devices to grant extended permissions to.",
+                            "x-position": 1,
+                            "items": {
+                                "title": "Device",
+                                "x-name": "device",
+                                "x-hidden": false,
+                                "format": "doover-resource-device",
+                                "type": "string",
+                                "x-required": true,
+                                "description": "Device ID",
+                                "pattern": "\\d+"
+                            }
+                        },
+                        "groups": {
+                            "title": "Groups",
+                            "x-name": "groups",
+                            "x-hidden": false,
+                            "type": "array",
+                            "x-required": true,
+                            "description": "List of groups to grant permissions to.",
+                            "x-position": 2,
+                            "items": {
+                                "title": "Group",
+                                "x-name": "group",
+                                "x-hidden": false,
+                                "format": "doover-resource-group",
+                                "type": "string",
+                                "x-required": true,
+                                "description": "Group ID",
+                                "pattern": "\\d+"
+                            }
+                        },
+                        "apps_installed": {
+                            "title": "Apps Installed",
+                            "x-name": "apps_installed",
+                            "x-hidden": false,
+                            "type": "array",
+                            "x-required": true,
+                            "description": "Permission will be given to any devices which have any of the apps listed installed.",
+                            "x-position": 3,
+                            "items": {
+                                "title": "Application",
+                                "x-name": "application",
+                                "x-hidden": false,
+                                "format": "doover-resource-application",
+                                "type": "string",
+                                "x-required": true,
+                                "description": "Application"
+                            }
+                        },
+                        "all_devices": {
+                            "title": "All Devices",
+                            "x-name": "all_devices",
+                            "x-hidden": false,
+                            "type": [
+                                "boolean",
+                                "null"
+                            ],
+                            "x-required": false,
+                            "description": "Permission will be given for all devices in this organisation. This is a very far-reaching permission to grant!",
+                            "default": false,
+                            "x-position": 4
+                        }
+                    },
+                    "additionalElements": true,
+                    "required": [
+                        "devices",
+                        "groups",
+                        "apps_installed"
+                    ],
+                    "x-collapsible": true,
+                    "x-defaultCollapsed": false,
+                    "x-extraDeviceFields": [
+                        "id",
+                        "display_name",
+                        "latitude",
+                        "longitude",
+                        "group__id",
+                        "type__name",
+                        "app_installs__name",
+                        "app_installs__application_name",
+                        "solution_installs__display_name"
+                    ]
+                },
+                "gauge_app_name": {
+                    "title": "Gauge App Name",
+                    "x-name": "gauge_app_name",
+                    "x-hidden": false,
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "The application name of the rain-gauge app to aggregate. The widget reads each device's matching install to find its data channel (rainfall totals + the live since-9am tag). Only change this if your gauges run a renamed fork of the Analog Rain Gauge app.",
+                    "default": "analog_rain_gauge",
+                    "x-position": 1
+                },
+                "farm_name": {
+                    "title": "Farm Name",
+                    "x-name": "farm_name",
+                    "x-hidden": false,
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "(Optional) Display name for the property shown in the dashboard header. Leave blank to use the dashboard's own name.",
+                    "default": "",
+                    "x-position": 2
+                },
+                "dv_app_position": {
+                    "title": "Position",
+                    "x-name": "dv_app_position",
+                    "x-hidden": true,
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "x-required": false,
+                    "description": "Position of Application in UI Structure. Smaller numbers are closer to the top.",
+                    "default": 100,
+                    "x-position": 3,
+                    "minimum": 0
+                },
+                "ignored_groups": {
+                    "title": "Ignored Groups",
+                    "x-name": "ignored_groups",
+                    "x-hidden": false,
+                    "type": "array",
+                    "x-required": true,
+                    "description": "Any gauges in these groups will be hidden. Useful for testing or unallocated groups where you otherwise want to include all devices. Does not support hierarchical nesting - you must provide direct parent groups.",
+                    "x-position": 4,
+                    "items": {
+                        "title": "Group",
+                        "x-name": "group",
+                        "x-hidden": false,
+                        "format": "doover-resource-group",
+                        "type": "string",
+                        "x-required": true,
+                        "description": "Group ID",
+                        "pattern": "\\d+"
+                    }
+                }
+            },
+            "additionalElements": true,
+            "required": [
+                "dv_proc_extended_permissions",
+                "ignored_groups"
+            ]
+        },
+        "key": null,
+        "repo_branch": "main",
+        "lambda_config": {
+            "Environment": {},
+            "Runtime": "python3.13",
+            "Timeout": 300,
+            "Handler": "src.analog_rain_gauge_dashboard.handler",
+            "MemorySize": 128,
+            "Architectures": [
+                "arm64"
+            ]
+        },
+        "run_command": null,
+        "export_config_command": "export-config-dashboard",
+        "export_ui_command": "export-ui-dashboard",
+        "build_widget_command": "npm --prefix dashboard-widget run build",
+        "ui_schema": {
+            "displayString": "$config.app().APP_DISPLAY_NAME",
+            "hidden": "$config.app().hidden:boolean:false:boolean:false",
+            "position": "$config.app().dv_app_position:number:100",
+            "icon": null,
+            "colour": null,
+            "defaultOpen": true,
+            "type": "uiApplication",
+            "name": "$config.app().APP_KEY",
+            "children": {
+                "RainfallDashboard": {
+                    "name": "RainfallDashboard",
+                    "type": "uiRemoteComponent",
+                    "displayString": "Rainfall Dashboard",
+                    "showActivity": true,
+                    "componentUrl": "$config.app().dv_widget_url",
+                    "position": 51,
+                    "hidden": false,
+                    "children": {},
+                    "scope": "RainfallDashboardWidget",
+                    "module": "./RainfallDashboardWidget",
+                    "app_key": "$config.app().APP_KEY"
+                }
+            }
+        },
+        "icon_url": null,
+        "banner_url": null
     }
 }

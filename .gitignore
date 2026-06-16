@@ -175,3 +175,9 @@ cython_debug/
 
 widget/assets
 widget/node_modules
+dashboard-widget/assets
+dashboard-widget/node_modules
+# Lambda packaging artifacts (build.sh)
+packages_export
+package.zip
+requirements.txt

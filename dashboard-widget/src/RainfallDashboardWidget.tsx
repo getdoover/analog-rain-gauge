@@ -1,6 +1,6 @@
 import "./styles.css";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import { useRemoteParams } from "customer_site/useRemoteParams";
@@ -8,26 +8,28 @@ import { useRemoteParams } from "customer_site/useRemoteParams";
 import {
   useAgentChannel,
   useDeviceMap,
+  useDooverClient,
   useMultiAgentAggregates,
-  useMultiAgentChannelMessages,
   type DeviceMapEntry,
 } from "doover-js/react";
 import { generateSnowflakeIdAtTime } from "doover-js";
+import { useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 
 import {
-  DAY_MS,
-  bomBand,
   BOM,
-  farmDailyAverages,
-  gaugePeriodTotal,
+  bomBand,
+  bucketPulses,
   periodDays,
   rgb,
-  type DayBar,
+  sumWindow,
+  timeBins,
   type Period,
+  type PulseSample,
 } from "./lib/rainfall";
 import RainfallMap, { type MapGauge } from "./components/RainfallMap";
+import RainfallTimeline, { type TimelineSeries } from "./components/RainfallTimeline";
 
 dayjs.extend(relativeTime);
 
@@ -51,6 +53,23 @@ interface RainDeviceEntry extends DeviceMapEntry {
 /** `tag_values` aggregate shape: `{ <app_key>: { <tag>: value } }`. */
 type TagValuesAggregate = Record<string, Record<string, unknown> | undefined>;
 
+/** The bits of a `pulse` rain message we read from the batch endpoint. Each
+ *  pulse is one tip of the gauge: `mm` of rain at epoch-ms `timestamp`. */
+interface PulseMessage {
+  id: string;
+  timestamp?: number;
+  channel?: { agent_id?: string };
+  data?: { pulse?: { mm?: number; timestamp?: number } };
+}
+
+// Stable empty array so an unloaded query doesn't churn downstream memos.
+const EMPTY_PULSES: PulseMessage[] = [];
+
+// Pulse fetch bounds: paginate older within the window until drained, capped so
+// an extreme-rainfall gauge can't fan out unboundedly.
+const PULSE_PAGE_LIMIT = 500; // messages per agent per request
+const MAX_PULSE_PAGES = 6;
+
 interface DashboardDeploymentConfig {
   applications?: Record<
     string,
@@ -67,10 +86,11 @@ interface GaugeRow {
   name: string;
   lat: number | null;
   lng: number | null;
-  total: number | null; // mm over the selected period (null = no data)
+  total: number; // mm over the selected time window
+  hasData: boolean; // reporting, or has pulses in the period
   reporting: boolean;
   lastSeenMs: number | null;
-  color: string; // BOM band colour for the period total
+  color: string; // BOM band colour for the window total (map pin + table dot)
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +124,27 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "30d", label: "30d" },
 ];
 
-function periodLabel(p: Period): string {
-  return p === "today" ? "today" : p === "7d" ? "last 7 days" : "last 30 days";
+/** "Last seen" label — always in the past, so collapse anything within ~a
+ *  minute (or a slightly-future timestamp from clock skew) to "now" instead of
+ *  dayjs's "in a few seconds" / "a few seconds ago". */
+function lastSeenLabel(ms: number | null): string {
+  if (ms == null) return "never";
+  if (Date.now() - ms < 60_000) return "now";
+  return dayjs(ms).fromNow();
+}
+
+/** True on phone-width viewports — used to drop the "Last seen" table column. */
+function useIsNarrow(): boolean {
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 639px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +248,7 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
   );
   const appCfg = deploymentConfig?.applications?.[dashboardAppKey];
   const gaugeAppName = (typeof appCfg?.gauge_app_name === "string" && appCfg.gauge_app_name) || "analog_rain_gauge";
-  const farmName = (typeof appCfg?.farm_name === "string" && appCfg.farm_name.trim()) || "Farm";
+  const farmName = (typeof appCfg?.farm_name === "string" && appCfg.farm_name.trim()) || "All gauges";
 
   const ignoreGroupIds = useMemo(() => {
     const raw = appCfg?.ignored_groups;
@@ -244,9 +283,9 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
     () => [...new Set(Object.values(channelByDevice))],
     [channelByDevice],
   );
-  // The single channel the batched daily-totals read fans out over — the most
-  // common one across the fleet (every gauge in the uniform case).
-  const dailyChannel = useMemo(() => {
+  // The single channel the batched pulse read fans out over — the most common
+  // one across the fleet (every gauge in the uniform case).
+  const dataChannel = useMemo(() => {
     const counts = new Map<string, number>();
     for (const c of Object.values(channelByDevice)) counts.set(c, (counts.get(c) ?? 0) + 1);
     let best = gaugeAppName;
@@ -255,142 +294,184 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
     return best;
   }, [channelByDevice, gaugeAppName]);
 
-  // 2. live tag_values across the fleet — today's `since_9am` per gauge. Project
-  //    only the gauge channels' subtrees out of the (potentially large) aggregate.
+  // 2. live tag_values across the fleet — used only for "last seen" / reporting
+  //    status now (rainfall totals come from the raw pulses below).
   const { aggregatesByAgent: tagAggs, query: tagQuery } = useMultiAgentAggregates<TagValuesAggregate>(
     "tag_values",
     deviceIds,
     { fields: uniqueChannels.length > 0 ? uniqueChannels : [gaugeAppName] },
   );
 
-  // 3. daily rainfall totals for the whole fleet over the last 30 days, in one
-  //    batched read. `daily` messages carry { date, total_mm }.
-  const top = useMemo(() => Date.now() + 60_000, []);
-  const beforeCursor = useMemo(() => generateSnowflakeIdAtTime(dayjs(top)), [top]);
-  const afterCursor = useMemo(
-    () => generateSnowflakeIdAtTime(dayjs(top - 31 * DAY_MS)),
-    [top],
-  );
-  const dailyQuery = useMultiAgentChannelMessages<{ daily?: { date?: string; total_mm?: number } }>(
-    dailyChannel,
-    deviceIds,
-    {
-      fields: ["daily"],
-      initialBefore: beforeCursor,
-      after: afterCursor,
-      agentMessageLimit: 40,
-      liveUpdates: false,
-    },
-  );
+  // Stable "now" + the timeline's buckets for the selected period. Pinned at
+  // mount so the bins (and the pulse query window) don't churn every render.
+  const nowMs = useMemo(() => Date.now(), []);
+  const bins = useMemo(() => timeBins(period, new Date(nowMs)), [period, nowMs]);
 
-  // daily messages → per-device Map<dateKey, mm>
-  const dailyByDevice = useMemo(() => {
-    const out: Record<string, Map<string, number>> = {};
-    for (const m of dailyQuery.messages) {
-      const id = (m.channel as { agent_id?: string } | undefined)?.agent_id;
-      if (!id) continue;
-      const daily = (m.data as { daily?: { date?: string; total_mm?: number } } | undefined)?.daily;
-      const date = daily?.date;
-      const mm = daily?.total_mm;
-      if (typeof date === "string" && typeof mm === "number") {
-        (out[id] ??= new Map()).set(date, mm);
+  // Selected time window as an inclusive [startIdx, endIdx] over the bins. The
+  // brush in the timeline drives this, and it also drives the map. Reset to the
+  // full span whenever the period (and thus the bin count) changes.
+  const [selection, setSelection] = useState<[number, number]>(() => {
+    const b = timeBins("7d");
+    return [0, b.length - 1];
+  });
+  useEffect(() => {
+    setSelection([0, Math.max(0, bins.length - 1)]);
+  }, [period, bins.length]);
+
+  // 3. raw pulse events for the whole fleet across the period window. Each pulse
+  //    is one tip of the gauge ({ mm, timestamp }). We bound the read to the
+  //    timeline's span via `after`, then paginate older per-agent (using the
+  //    server's `next_cursors`) until the window is drained or we hit the cap.
+  const client = useDooverClient();
+  const windowStartMs = bins.length > 0 ? bins[0].start : nowMs - periodDays(period) * 86_400_000;
+  const pulseQuery = useQuery({
+    queryKey: ["rainfall-pulses", dataChannel, [...deviceIds].sort().join(","), period],
+    enabled: deviceIds.length > 0 && !!dataChannel && bins.length > 0,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const after = generateSnowflakeIdAtTime(dayjs(windowStartMs));
+      const before = generateSnowflakeIdAtTime(dayjs(nowMs + 60_000));
+      const byId = new Map<string, PulseMessage>();
+      let agentIds = [...deviceIds];
+      let agentBefore: string[] | undefined;
+      for (let page = 0; page < MAX_PULSE_PAGES && agentIds.length > 0; page++) {
+        const res = await client.agents.getMultiAgentMessages(dataChannel, {
+          agent_id: agentIds,
+          after,
+          // First page bounds with the global `before`; later pages resume each
+          // still-unfinished agent from its own cursor.
+          ...(agentBefore ? { agent_before: agentBefore } : { before }),
+          agent_message_limit: PULSE_PAGE_LIMIT,
+          field_name: ["pulse"],
+        });
+        for (const m of (res.results ?? []) as unknown as PulseMessage[]) byId.set(m.id, m);
+        const cursors = res.next_cursors;
+        if (!cursors || Object.keys(cursors).length === 0) break;
+        agentIds = Object.keys(cursors);
+        agentBefore = agentIds.map((id) => cursors[id]);
       }
+      return [...byId.values()];
+    },
+  });
+  const pulseMessages = pulseQuery.data ?? EMPTY_PULSES;
+
+  // pulse messages → per-device PulseSample[] (ms timestamp + mm).
+  const pulsesByDevice = useMemo(() => {
+    const out: Record<string, PulseSample[]> = {};
+    for (const m of pulseMessages) {
+      const id = m.channel?.agent_id;
+      const p = m.data?.pulse;
+      if (!id || !p) continue;
+      const ts = typeof p.timestamp === "number" ? p.timestamp : null;
+      const mm = typeof p.mm === "number" ? p.mm : null;
+      if (ts == null || mm == null) continue;
+      (out[id] ??= []).push({ ts, mm });
     }
     return out;
-  }, [dailyQuery.messages]);
+  }, [pulseMessages]);
+
+  // Per-gauge stacked-timeline series: mm bucketed into the bins, one colour
+  // per gauge (stable by device order).
+  const series = useMemo<TimelineSeries[]>(
+    () =>
+      devices.map((d) => ({
+        id: d.id,
+        name: displayNameOf(d),
+        binMm: bucketPulses(pulsesByDevice[d.id] ?? [], bins),
+      })),
+    [devices, pulsesByDevice, bins],
+  );
+
+  // Selection clamped to the current bins — guards the one frame after a period
+  // switch where `selection` (reset by an effect) can still point past the new,
+  // shorter bin range.
+  const sel = useMemo<[number, number]>(() => {
+    const last = Math.max(0, bins.length - 1);
+    return [Math.min(selection[0], last), Math.min(selection[1], last)];
+  }, [selection, bins.length]);
+
+  // Per-gauge rainfall within the selected window (sum of the bin slice).
+  const windowTotals = useMemo(() => {
+    const [s, e] = sel;
+    const out: Record<string, number> = {};
+    for (const ser of series) out[ser.id] = sumWindow(ser.binMm, s, e);
+    return out;
+  }, [series, sel]);
 
   // 4. assemble the per-gauge rows
   const rows = useMemo<GaugeRow[]>(() => {
-    const now = new Date();
-    const nowMs = now.getTime();
     return devices.map((dev) => {
-      const channel = channelByDevice[dev.id] ?? gaugeAppName;
       const tagAgg = tagAggs[dev.id];
-      const todayMm = num(tagAgg?.data?.[channel]?.since_9am);
-      const dailyByDate = dailyByDevice[dev.id] ?? new Map<string, number>();
-      const total = gaugePeriodTotal(dailyByDate, todayMm, period, now);
       const lastSeenMs = tagAgg?.last_updated ?? null;
       const reporting = lastSeenMs != null && nowMs - lastSeenMs < REPORTING_WINDOW_MS;
+      const hasPulses = (pulsesByDevice[dev.id]?.length ?? 0) > 0;
       return {
         id: dev.id,
         name: displayNameOf(dev),
         lat: num(dev.latitude),
         lng: num(dev.longitude),
-        total,
+        total: windowTotals[dev.id] ?? 0,
+        hasData: reporting || hasPulses,
         reporting,
         lastSeenMs,
-        color: rgb(bomBand(total ?? 0)),
+        color: rgb(bomBand(windowTotals[dev.id] ?? 0)),
       };
     });
-  }, [devices, tagAggs, dailyByDevice, channelByDevice, gaugeAppName, period]);
+  }, [devices, tagAggs, windowTotals, pulsesByDevice, nowMs]);
 
-  // Stats over gauges that actually have a reading this period.
-  const withData = useMemo(() => rows.filter((r) => r.total != null), [rows]);
+  // Stats over gauges we've actually heard from (reporting, or with pulses).
+  const withData = useMemo(() => rows.filter((r) => r.hasData), [rows]);
   const stats = useMemo(() => {
     if (withData.length === 0) return null;
-    const totals = withData.map((r) => r.total as number);
+    const totals = withData.map((r) => r.total);
     const avg = totals.reduce((s, v) => s + v, 0) / totals.length;
-    const wettest = withData.reduce((a, b) => ((b.total as number) > (a.total as number) ? b : a));
-    const driest = withData.reduce((a, b) => ((b.total as number) < (a.total as number) ? b : a));
-    return {
-      avg,
-      wettest,
-      driest,
-      spread: (wettest.total as number) - (driest.total as number),
-    };
+    const wettest = withData.reduce((a, b) => (b.total > a.total ? b : a));
+    const driest = withData.reduce((a, b) => (b.total < a.total ? b : a));
+    return { avg, wettest, driest };
   }, [withData]);
 
   const reportingCount = useMemo(() => rows.filter((r) => r.reporting).length, [rows]);
+  const narrow = useIsNarrow(); // phone width → drop the "Last seen" table column
 
-  const dec = period === "30d" ? 0 : 1;
+  const dec = 1;
   const fmt = (v: number) => v.toFixed(dec);
 
-  // Map gauges: those with a location and a reading this period.
+  // Map gauges: every located gauge, coloured per-gauge, sized by window rain.
   const mapGauges = useMemo<MapGauge[]>(
     () =>
       rows
-        .filter((r) => r.lat != null && r.lng != null && r.total != null)
+        .filter((r) => r.lat != null && r.lng != null)
         .map((r) => ({
           id: r.id,
           name: r.name,
           lat: r.lat as number,
           lng: r.lng as number,
-          mm: r.total as number,
-          mmLabel: fmt(r.total as number),
+          mm: r.total,
+          mmLabel: fmt(r.total),
           color: r.color,
           reporting: r.reporting,
         })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows],
   );
-  const noLocationCount = withData.length - mapGauges.length;
 
-  // Over-time chart: farm-average rainfall per day across the window (min 7 days
-  // of context even for "today").
-  const bars: DayBar[] = useMemo(() => {
-    const win = Math.max(7, periodDays(period));
-    const daily = devices.map((d) => dailyByDevice[d.id] ?? new Map<string, number>());
-    const today = devices.map((d) => {
-      const channel = channelByDevice[d.id] ?? gaugeAppName;
-      return num(tagAggs[d.id]?.data?.[channel]?.since_9am);
-    });
-    return farmDailyAverages(daily, today, win);
-  }, [devices, dailyByDevice, tagAggs, channelByDevice, gaugeAppName, period]);
-  const barMax = useMemo(() => Math.max(...bars.map((b) => b.mm), 0.1), [bars]);
-  const periodTotalBars = useMemo(() => bars.reduce((s, b) => s + b.mm, 0), [bars]);
-  const peakDay = useMemo(() => Math.max(...bars.map((b) => b.mm), 0), [bars]);
+  // Timeline / window summary.
+  const binUnit = period === "today" ? "hour" : period === "7d" ? "6 hours" : "day";
+  const windowLabel =
+    bins.length > 0 ? `${bins[sel[0]]?.full} – ${bins[sel[1]]?.full}` : "";
+  const windowTotalAll = useMemo(
+    () => Object.values(windowTotals).reduce((s, v) => s + v, 0),
+    [windowTotals],
+  );
+  const hasAnyRain = useMemo(
+    () => series.some((s) => s.binMm.some((v) => v > 0)),
+    [series],
+  );
 
-  // Legend cells up to the band above the max gauge value.
-  const legend = useMemo(() => {
-    const maxV = withData.length ? Math.max(...withData.map((r) => r.total as number)) : 0;
-    let hi = BOM.findIndex((s) => s[0] > maxV);
-    if (hi < 0) hi = BOM.length - 1;
-    const cells = [];
-    for (let i = 0; i < hi; i++) cells.push({ color: rgb(BOM[i][1]), from: BOM[i][0] });
-    return { cells, top: BOM[hi][0] };
-  }, [withData]);
+  // The full BOM rainfall-totals scale (every band) for the map legend.
+  const legendCells = useMemo(() => BOM.map(([from, c]) => ({ color: rgb(c), from })), []);
 
-  if (cfgLoading || (deviceIds.length > 0 && tagQuery.isLoading && withData.length === 0)) {
+  if (cfgLoading || (deviceIds.length > 0 && (tagQuery.isLoading || pulseQuery.isLoading) && withData.length === 0)) {
     return <div style={{ padding: 16, fontSize: 14, color: "var(--muted-foreground)" }}>Loading rainfall data…</div>;
   }
 
@@ -409,11 +490,8 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
           <div>
-            <Eyebrow>Farm rainfall</Eyebrow>
-            <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.2 }}>{farmName} — rainfall</div>
-            <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 3 }}>
-              How much rain has fallen across the property · {periodLabel(period)}
-            </div>
+            <Eyebrow>Rainfall</Eyebrow>
+            <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.2 }}>{farmName}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: "var(--muted-foreground)", display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -427,38 +505,24 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
         {/* Stat tiles */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(178px,1fr))", gap: 12 }}>
           <StatTile
-            eyebrow="Farm average"
+            eyebrow="Average"
             value={stats ? <>{fmt(stats.avg)} <Unit /></> : "—"}
-            sub={`across ${withData.length} gauges · ${periodLabel(period)}`}
+            sub={`across ${withData.length} gauges · selected window`}
           />
           <StatTile
             eyebrow="Wettest gauge"
-            value={stats ? <>{fmt(stats.wettest.total as number)} <Unit /></> : "—"}
+            value={stats ? <>{fmt(stats.wettest.total)} <Unit /></> : "—"}
             sub={stats ? <><ColorDot color={stats.wettest.color} />{stats.wettest.name}</> : "—"}
           />
           <StatTile
             eyebrow="Driest gauge"
-            value={stats ? <>{fmt(stats.driest.total as number)} <Unit /></> : "—"}
+            value={stats ? <>{fmt(stats.driest.total)} <Unit /></> : "—"}
             sub={stats ? <><ColorDot color={stats.driest.color} />{stats.driest.name}</> : "—"}
-          />
-          <StatTile
-            eyebrow="Spread"
-            value={stats ? <>{fmt(stats.spread)} <Unit /></> : "—"}
-            sub="wettest − driest across farm"
           />
         </div>
 
         {/* Map */}
         <Card style={{ padding: 0, gap: 0, overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div>
-              <Eyebrow>Rainfall surface</Eyebrow>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>Where the rain fell · {periodLabel(period)}</div>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
-              Interpolated from {mapGauges.length} located gauge{mapGauges.length === 1 ? "" : "s"}
-            </div>
-          </div>
           {mapGauges.length === 0 ? (
             <div style={{ padding: "40px 16px", textAlign: "center", fontSize: 13, color: "var(--muted-foreground)" }}>
               No gauges have a location set, so the map can't be drawn. Set each gauge's location on its device to place it
@@ -467,49 +531,82 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
           ) : (
             <RainfallMap gauges={mapGauges} height={520} />
           )}
-          {/* Legend */}
-          {legend.cells.length > 0 && (
-            <div style={{ padding: "13px 16px", display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", borderTop: "1px solid var(--border)" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 240 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <Eyebrow>Rainfall · BOM scale</Eyebrow>
-                  <span style={{ fontSize: 10, color: "var(--muted-foreground)" }}>mm</span>
-                </div>
-                <div style={{ display: "flex", height: 10, borderRadius: 3, overflow: "hidden", boxShadow: "inset 0 0 0 1px rgba(0,0,0,.12)" }}>
-                  {legend.cells.map((c, i) => (
-                    <div key={i} style={{ flex: 1, background: c.color }} />
-                  ))}
-                </div>
-                <div style={{ display: "flex" }}>
-                  {legend.cells.map((c, i) => (
-                    <div key={i} style={{ flex: 1, fontSize: 10, color: "var(--muted-foreground)" }}>{c.from}</div>
-                  ))}
-                  <div style={{ fontSize: 10, color: "var(--muted-foreground)", fontWeight: 600 }}>{legend.top}</div>
-                </div>
+          {/* Legend — the full BOM rainfall-totals scale (amount of rain) */}
+          <div style={{ padding: "13px 16px", borderTop: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <Eyebrow>Rainfall · BOM scale</Eyebrow>
+                <span style={{ fontSize: 10, color: "var(--muted-foreground)" }}>mm</span>
               </div>
-              <div style={{ fontSize: 11, color: "var(--muted-foreground)", maxWidth: 360, lineHeight: 1.5 }}>
-                Colour fades to the satellite away from any gauge, where the estimate is least certain — gauge pins are the
-                source of truth.
-                {noLocationCount > 0 && ` ${noLocationCount} gauge${noLocationCount === 1 ? "" : "s"} without a location aren't shown on the map.`}
+              <div style={{ display: "flex", height: 10, borderRadius: 3, overflow: "hidden", boxShadow: "inset 0 0 0 1px rgba(0,0,0,.12)" }}>
+                {legendCells.map((c, i) => (
+                  <div key={i} style={{ flex: 1, background: c.color }} />
+                ))}
+              </div>
+              <div style={{ display: "flex" }}>
+                {legendCells.map((c, i) => (
+                  <div key={i} style={{ flex: 1, fontSize: 10, color: "var(--muted-foreground)" }}>{c.from}</div>
+                ))}
               </div>
             </div>
-          )}
+          </div>
         </Card>
 
-        {/* Supporting row */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 14 }}>
-          {/* Per-gauge table */}
+        {/* Rainfall over time — stacked by gauge, with a draggable time window */}
+        <Card style={{ gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500 }}>Rainfall over time</div>
+              <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
+                stacked by gauge · mm per {binUnit} · drag the handles to set the window
+              </div>
+            </div>
+            <span style={{ fontSize: 11, color: "var(--muted-foreground)", fontVariantNumeric: "tabular-nums" }}>
+              {windowLabel}
+            </span>
+          </div>
+
+          {!hasAnyRain ? (
+            <div style={{ padding: "30px 8px", textAlign: "center", fontSize: 13, color: "var(--muted-foreground)" }}>
+              No rainfall recorded across the gauges in this period.
+            </div>
+          ) : (
+            <RainfallTimeline
+              bins={bins}
+              series={series}
+              selection={sel}
+              onSelectionChange={setSelection}
+            />
+          )}
+
+          <div style={{ fontSize: 11, color: "var(--muted-foreground)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+            <span style={{ display: "block", marginBottom: 6 }}>
+              Each bar is stacked per gauge and shaded by the BOM scale above (hover a segment for the gauge).
+            </span>
+            Rain in window{" "}
+            <span style={{ color: "var(--foreground)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+              {windowTotalAll.toFixed(dec)} mm
+            </span>{" "}
+            across all gauges · average{" "}
+            <span style={{ color: "var(--foreground)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+              {stats ? fmt(stats.avg) : "0"} mm
+            </span>
+          </div>
+        </Card>
+
+        {/* Per-gauge table */}
+        <div>
           <Card style={{ padding: 0, gap: 0, overflow: "hidden" }}>
             <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontSize: 14, fontWeight: 500 }}>Rain gauges</div>
-              <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{periodLabel(period)}</span>
+              <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>selected window</span>
             </div>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ color: "var(--muted-foreground)", fontSize: 11, textAlign: "left" }}>
                   <th style={{ padding: "6px 16px", fontWeight: 500 }}>Gauge</th>
                   <th style={{ padding: "6px 16px", fontWeight: 500, textAlign: "right" }}>Rain</th>
-                  <th style={{ padding: "6px 16px", fontWeight: 500, textAlign: "right" }}>Last seen</th>
+                  {!narrow && <th style={{ padding: "6px 16px", fontWeight: 500, textAlign: "right" }}>Last seen</th>}
                 </tr>
               </thead>
               <tbody>
@@ -517,71 +614,35 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
                   <tr key={g.id} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "8px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <ColorDot color={g.color} muted={g.total == null} />
+                        <ColorDot color={g.color} muted={!g.hasData} />
                         <span style={{ fontWeight: 500 }}>{g.name}</span>
                       </div>
                     </td>
                     <td style={{ padding: "8px 16px", textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                      {g.total == null ? <span style={{ color: "var(--muted-foreground)" }}>—</span> : `${fmt(g.total)} mm`}
+                      {!g.hasData ? <span style={{ color: "var(--muted-foreground)" }}>—</span> : `${fmt(g.total)} mm`}
                     </td>
-                    <td style={{ padding: "8px 16px", textAlign: "right" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "flex-end" }}>
-                        <span
-                          style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: 999,
-                            background: g.reporting ? "var(--doover-connection-online, #22c55e)" : "var(--muted-foreground)",
-                            display: "inline-block",
-                          }}
-                        />
-                        <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
-                          {g.lastSeenMs ? dayjs(g.lastSeenMs).fromNow() : "never"}
-                        </span>
-                      </div>
-                    </td>
+                    {!narrow && (
+                      <td style={{ padding: "8px 16px", textAlign: "right" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "flex-end" }}>
+                          <span
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: 999,
+                              background: g.reporting ? "var(--doover-connection-online, #22c55e)" : "var(--muted-foreground)",
+                              display: "inline-block",
+                            }}
+                          />
+                          <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
+                            {lastSeenLabel(g.lastSeenMs)}
+                          </span>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
-          </Card>
-
-          {/* Over time */}
-          <Card style={{ gap: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ fontSize: 14, fontWeight: 500 }}>Rainfall over time</div>
-              <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>farm average · mm / day</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "stretch", gap: bars.length > 14 ? 2 : 6 }}>
-              {bars.map((b) => (
-                <div key={b.key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 0 }}>
-                  <div style={{ width: "100%", height: 120, display: "flex", alignItems: "flex-end", justifyContent: "center" }} title={`${b.label}: ${b.mm} mm`}>
-                    <div
-                      style={{
-                        width: "72%",
-                        height: `${(b.mm / barMax) * 100}%`,
-                        minHeight: 2,
-                        background: "linear-gradient(180deg,#5b9bf0,#3b5bd6)",
-                        borderRadius: "3px 3px 0 0",
-                      }}
-                    />
-                  </div>
-                  <div style={{ fontSize: 9, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
-                    {bars.length > 14 ? "" : b.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--muted-foreground)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-              Total this period{" "}
-              <span style={{ color: "var(--foreground)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                {periodTotalBars.toFixed(dec)} mm
-              </span>{" "}
-              · peak day{" "}
-              <span style={{ color: "var(--foreground)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                {peakDay.toFixed(dec)} mm
-              </span>
-            </div>
           </Card>
         </div>
       </div>

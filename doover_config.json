@@ -238,7 +238,7 @@
         "description": "Farm dashboard aggregating every Analog Rain Gauge it can see - farm average / wettest / driest, a per-gauge table, rainfall-over-time, and an interpolated rainfall heatmap over a satellite basemap.",
         "long_description": "README.dashboard.md",
         "depends_on": [],
-        "owner_org": "36a22e32-ab81-4a39-b400-869d532a052d",
+        "organisation_id": null,
         "image_name": null,
         "build_args": null,
         "staging_config": {
@@ -470,6 +470,12 @@
             }
         },
         "icon_url": null,
-        "banner_url": null
+        "banner_url": null,
+        "container_registry_profile_id": null,
+        "id": 192557094740743944,
+        "owner_org_id": null,
+        "code_repo_id": null,
+        "lambda_arn": null,
+        "widget": "dashboard-widget/assets/RainfallDashboardWidget.js"
     }
 }

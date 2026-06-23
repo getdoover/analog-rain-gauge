@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rsbuild build",
     "watch": "rsbuild build --watch --mode development",
-    "serve": "serve -s assets/ -l 8003"
+    "serve": "serve -s assets/ -l 8003",
+    "publish": "rsbuild build && doover channel publish-file analog_rain_gauge_dashboard_1_widget assets/RainfallDashboardWidget.js --agent 192557351130158854"
   },
   "author": "Doover Team",
   "license": "ISC",

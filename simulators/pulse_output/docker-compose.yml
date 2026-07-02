@@ -1,0 +1,19 @@
+services:
+  pulse_output:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - APP_KEY=pulse_output
+      - HEALTHCHECK_PORT=49212
+      # Pin / timing overrides (defaults shown):
+      # - DO_PIN=0
+      # - PULSE_COUNT=5
+      # - PULSE_HIGH_SECS=1.0
+      # - PULSE_GAP_SECS=1.0
+      # - BURST_INTERVAL_SECS=864000   # 10 days
+      # - REPORT_INTERVAL_SECS=15
+      # Point at the device agent if not auto-discovered on the doovit:
+      # - DDA_URI=127.0.0.1:50051
+    volumes:
+      - /etc/localtime:/etc/localtime:ro

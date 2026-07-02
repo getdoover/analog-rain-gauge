@@ -1,0 +1,11 @@
+[project]
+name = "pulse-output"
+version = "0.1.0"
+description = "Periodically pulses a digital output on a Doovit"
+requires-python = ">=3.11"
+dependencies = [
+    "pydoover",
+]
+
+[project.scripts]
+doover-app-run = "main:main"

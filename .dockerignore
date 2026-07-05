@@ -1,1 +1,4 @@
 .venv
+packages_export
+package.zip
+dashboard-widget

@@ -1,30 +1,44 @@
 # pulse_output
 
-A minimal standalone Doover app that drives a digital output on a real Doovit
-via the normal platform interface (`self.set_do`).
+A minimal standalone Doover app that drives two digital outputs on a real
+Doovit via the normal platform interface (`self.set_do`). Each output is wired
+to a voltage input, so pulsing the output produces a voltage-input pulse that a
+downstream app (e.g. the rain gauge) can count.
 
 **Behaviour**
 
-- Every **10 days** it fires a burst of **5 pulses** on **DO 0**: each pulse
-  drives the output high for 1s then low, with a 1s gap between pulses
-  (whole burst takes ~9s, well within a minute).
-- One burst is fired on first-ever startup so you can confirm the wiring.
-- While idle it logs the time until the next burst every **15s**.
+- **DO 0** fires a single pulse **once every 10 days** (a slow heartbeat).
+- **DO 1** fires a single pulse at a **random interval between 1s and 1hr**; a
+  fresh random gap is chosen after every pulse.
+- Each pulse drives the output high for 1s then low (`PULSE_HIGH_SECS`).
+- Both outputs fire once on first-ever startup so you can confirm the wiring.
+- While idle each output logs the time until its next pulse every **15s**.
 
-**Surviving sleep/wake.** The doovit sleeps between bursts, so the schedule is
-kept in persisted tags (as an absolute wall-clock time) rather than in memory:
+**Cross-check log.** Every time an output is set (both edges of every pulse, and
+the initial low on startup) a message is recorded to the `pulse_output_log`
+channel (`LOG_CHANNEL`) with `{do, label, value, timestamp}`. Pins are fixed —
+DO 0 is always pin 0 and DO 1 is always pin 1 — so this channel is the source of
+truth for what was actually driven, to reconcile against whatever counts the
+voltage input downstream.
 
-- `next_burst_epoch` — authoritative unix epoch of the next burst.
-- `next_burst_time` — human-readable (device local time) mirror.
+**Surviving sleep/wake.** The doovit sleeps between pulses, so each output's
+schedule is kept in persisted tags (as an absolute wall-clock time) rather than
+in memory:
 
-On each wake it reads `next_burst_epoch`: if that time has passed while asleep
-it fires a burst and reschedules; otherwise it resumes counting down. The
-initial burst only happens when no schedule tag exists yet (i.e. a fresh
-install), so restarts/wakes never trigger a spurious burst.
+- `next_pulse_epoch_do0` / `next_pulse_epoch_do1` — authoritative unix epoch of
+  the next pulse.
+- `next_pulse_time_do0` / `next_pulse_time_do1` — human-readable (device local
+  time) mirrors.
 
-Everything is configurable via env vars (see `docker-compose.yml`): `DO_PIN`,
-`PULSE_COUNT`, `PULSE_HIGH_SECS`, `PULSE_GAP_SECS`, `BURST_INTERVAL_SECS`,
-`REPORT_INTERVAL_SECS`.
+On each wake it reads the epoch tag for each output: if that time has passed
+while asleep it fires a pulse and reschedules (DO 1 picking a new random gap);
+otherwise it resumes counting down. The initial pulse only happens when no
+schedule tag exists yet (i.e. a fresh install), so restarts/wakes never trigger
+a spurious pulse.
+
+Timing is configurable via env vars (see `docker-compose.yml`):
+`DO0_INTERVAL_SECS`, `DO1_MIN_INTERVAL_SECS`, `DO1_MAX_INTERVAL_SECS`,
+`PULSE_HIGH_SECS`, `REPORT_INTERVAL_SECS`, `LOOP_PERIOD_SECS`, `LOG_CHANNEL`.
 
 **Run on a Doovit**
 

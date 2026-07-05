@@ -46,6 +46,9 @@ class AnalogRainGaugeApplication(Application):
             int(self.config.input_pin.value), self.on_gauge_pulse, "rising"
         )
 
+        self.platform_iface.start_di_pulse_listener(0, self.on_gauge_pulse, "VI+10")
+        self.platform_iface.start_di_pulse_listener(1, self.on_gauge_pulse, "VI+10")
+
     async def main_loop(self):
         await self.check_event_done()
         await self.check_9am_reset()

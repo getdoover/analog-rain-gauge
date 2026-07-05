@@ -23,25 +23,25 @@ services:
 #      - HEALTHCHECK_PORT=49211
 ##      - DDA_URI=192.168.0.53:50051
 #
-#  analog_rain_gauge:
-#    build: ../
-#    network_mode: host
-#    restart: unless-stopped
+  analog_rain_gauge:
+    build: ../
+    network_mode: host
+    restart: unless-stopped
 #    depends_on:
-##      device_agent:
-##        condition: service_healthy
-##      platform_iface:
-##        condition: service_healthy
+#      device_agent:
+#        condition: service_healthy
+#      platform_iface:
+#        condition: service_healthy
 #      ananlog_rain_gauge_simulator:
 #        condition: service_healthy
-#    environment:
-#      - APP_KEY=test_app_key
-#      - CONFIG_FP=/app/simulators/app_config.json
-#      - HEALTHCHECK_PORT=49202
-##      - DDA_URI=192.168.0.53:50051
-#    volumes:
-##      - ./app_config.json:/app_config.json
-#      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - APP_KEY=test_app_key
+      - CONFIG_FP=/app/simulators/app_config.json
+      - HEALTHCHECK_PORT=49202
+#      - DDA_URI=192.168.0.53:50051
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+
   pulse_output:
     build: pulse_output/
     network_mode: host
@@ -49,13 +49,14 @@ services:
     environment:
       - APP_KEY=pulse_output
       - HEALTHCHECK_PORT=49212
-      # Pin / timing overrides (defaults shown):
-      # - DO_PIN=0
-      # - PULSE_COUNT=5
+      # Timing overrides (defaults shown). Pins are fixed: DO 0 -> 0, DO 1 -> 1.
+      # - DO0_INTERVAL_SECS=864000        # 10 days
+      # - DO1_MIN_INTERVAL_SECS=1         # 1 second
+      # - DO1_MAX_INTERVAL_SECS=3600      # 1 hour
       # - PULSE_HIGH_SECS=1.0
-      # - PULSE_GAP_SECS=1.0
-      # - BURST_INTERVAL_SECS=864000   # 10 days
       # - REPORT_INTERVAL_SECS=15
+      # - LOOP_PERIOD_SECS=1.0
+      # - LOG_CHANNEL=pulse_output_log    # channel each DO set is recorded to
       # Point at the device agent if not auto-discovered on the doovit:
       # - DDA_URI=127.0.0.1:50051
     volumes:

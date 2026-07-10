@@ -30,17 +30,25 @@ class AnalogRainGaugeApplication(Application):
                 datetime.now(timezone.utc).astimezone().timestamp()
             )
 
+        last_event_ms = int(self.tags.last_pulse_io_board.value or 0)
         _events_synced, events = await self.platform_iface.fetch_di_events(
             int(self.config.input_pin.value),
             edge="rising",
-            events_from=int(self.tags.last_pulse_io_board.value),
+            events_from=last_event_ms,
         )
         for event in events:
             # `event.time` is the IO-board timestamp in ms; replay each pulse at
             # its real time, not "now" (otherwise a buffered batch all lands in
             # the restart hour and the intensity calc sees ~0ms gaps).
-            event_secs = getattr(event, "time", 0) / 1000 or None
-            await self.on_gauge_pulse(event_time=event_secs)
+            event_ms = getattr(event, "time", 0)
+            # `events_from` is inclusive, so the newest already-counted pulse
+            # comes back every time. A Doovit that duty-cycles on battery
+            # voltage re-runs setup() on each wake, so replaying the boundary
+            # event re-counted the last tip once per wake — ~30x/day, a flat
+            # 6mm/day of rain that never fell.
+            if event_ms and event_ms <= last_event_ms:
+                continue
+            await self.on_gauge_pulse(event_time=event_ms / 1000 or None)
 
         self.platform_iface.start_di_pulse_listener(
             int(self.config.input_pin.value), self.on_gauge_pulse, "rising"
@@ -72,7 +80,7 @@ class AnalogRainGaugeApplication(Application):
         last_9am_reset = self.tags.last_9am_reset.value
         if last_9am_reset:
             as_dt = datetime.fromtimestamp(last_9am_reset, tz=now.tzinfo)
-            needs_reset = as_dt.date() < now.date() and now.hour > 9
+            needs_reset = as_dt.date() < now.date() and now.hour >= 9
         else:
             needs_reset = False
 
@@ -82,6 +90,9 @@ class AnalogRainGaugeApplication(Application):
             log.info(
                 "Resetting rainfall since 9am (%.2fmm on %s)", daily_total, reset_date
             )
+
+            await self.tags.since_9am.set(0)
+            await self.tags.last_9am_reset.set(now.timestamp())
 
             await self.device_agent.create_message(
                 self.app_key,
@@ -94,9 +105,6 @@ class AnalogRainGaugeApplication(Application):
                     },
                 },
             )
-
-            await self.tags.since_9am.set(0)
-            await self.tags.last_9am_reset.set(now.timestamp())
 
     async def on_gauge_pulse(self, *args, event_time: float | None = None, **kwargs):
         log.info("Received pulse from rain gauge")

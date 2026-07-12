@@ -3,7 +3,7 @@ import {useState, useMemo, useEffect} from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import {useRemoteParams} from "customer_site/useRemoteParams";
 import {peekDooverClient} from "doover-js";
-import {DooverProvider, useChannelMessages, useAgentChannel} from "doover-js/react";
+import {DooverProvider, useChannelMessages} from "doover-js/react";
 import {
   BarChart,
   Bar,
@@ -91,17 +91,6 @@ interface SelectedDay {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getLocalDate9am(): Date {
-  const now = new Date();
-  const today9am = new Date(now);
-  today9am.setHours(9, 0, 0, 0);
-
-  if (now < today9am) {
-    today9am.setDate(today9am.getDate() - 1);
-  }
-  return today9am;
-}
-
 function formatHour(hour: number): string {
   const suffix = hour >= 12 ? "pm" : "am";
   const h = hour % 12 || 12;
@@ -113,19 +102,20 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-function getDayWindow(day: SelectedDay | null): { start9am: Date; end: Date } {
-  if (!day || isToday(day)) {
-    const start9am = getLocalDate9am();
-    return { start9am, end: new Date() };
-  }
-  const start9am = new Date(day.year, day.month, day.day, 9, 0, 0, 0);
-  const end = new Date(start9am);
-  end.setDate(end.getDate() + 1);
-  return { start9am, end };
+/**
+ * The local calendar day (00:00–23:59) a pulse falls in. Daily/monthly/annual
+ * bars are summed from raw pulses by this calendar day, so a day's total is
+ * simply all rain that fell between local midnight and the next.
+ */
+function localDayOf(ts: number): SelectedDay {
+  const d = new Date(ts);
+  return {year: d.getFullYear(), month: d.getMonth(), day: d.getDate()};
 }
 
 const COMPARE_COLORS = [
@@ -159,47 +149,36 @@ function bucketDayByHour(
 ): ChartBucket[] {
   const viewingToday = isToday(selectedDay);
 
-  let start9am: Date;
-  let end: Date;
-
-  if (viewingToday) {
-    start9am = getLocalDate9am();
-    end = new Date();
-  } else {
-    start9am = new Date(selectedDay!.year, selectedDay!.month, selectedDay!.day, 9, 0, 0, 0);
-    end = new Date(start9am);
-    end.setDate(end.getDate() + 1); // next day 9am
-  }
+  // A calendar day: local midnight → next midnight (or "now" for today), so the
+  // hourly breakdown sums to the same total as that day's bar elsewhere.
+  const start = viewingToday
+    ? new Date(new Date().setHours(0, 0, 0, 0))
+    : new Date(selectedDay!.year, selectedDay!.month, selectedDay!.day, 0, 0, 0, 0);
+  const end = viewingToday ? new Date() : new Date(start.getTime() + 24 * 3600_000);
+  const lastHour = viewingToday ? new Date().getHours() : 23;
 
   const buckets: Map<number, number> = new Map();
-  const cursor = new Date(start9am);
-  while (cursor <= end) {
-    buckets.set(cursor.getHours(), 0);
-    cursor.setHours(cursor.getHours() + 1);
+  for (let h = 0; h <= lastHour; h++) {
+    buckets.set(h, 0);
   }
 
-  const startMs = start9am.getTime();
+  const startMs = start.getTime();
   const endMs = end.getTime();
   for (const msg of messages) {
     const ts = msg.data.timestamp;
     if (ts < startMs || ts > endMs) continue;
-
-    const d = new Date(ts);
-    const h = d.getHours();
+    const h = new Date(ts).getHours();
     if (buckets.has(h)) {
       buckets.set(h, (buckets.get(h) || 0) + (msg.data.mm || 0));
     }
   }
 
   const result: ChartBucket[] = [];
-  const iter = new Date(start9am);
-  while (iter <= end) {
-    const h = iter.getHours();
+  for (let h = 0; h <= lastHour; h++) {
     result.push({
       label: formatHour(h),
       mm: Math.round((buckets.get(h) || 0) * 100) / 100,
     });
-    iter.setHours(iter.getHours() + 1);
   }
   return result;
 }
@@ -208,7 +187,6 @@ function bucketMonthByDay(
   messages: ChannelMessage[],
   year: number,
   month: number,
-  todayMm?: number,
 ): ChartBucket[] {
   const now = new Date();
   const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
@@ -221,16 +199,10 @@ function bucketMonthByDay(
   }
 
   for (const msg of messages) {
-    if (!msg.data.date) continue;
-    const [y, m, d] = msg.data.date.split("-").map(Number);
-    if (y === year && m === month + 1) {
-      buckets.set(d, (buckets.get(d) || 0) + (msg.data.total_mm || 0));
+    const rd = localDayOf(msg.data.timestamp);
+    if (rd.year === year && rd.month === month) {
+      buckets.set(rd.day, (buckets.get(rd.day) || 0) + (msg.data.mm || 0));
     }
-  }
-
-  // Add today's live total from the since_9am tag
-  if (isCurrentMonth && todayMm != null) {
-    buckets.set(now.getDate(), (buckets.get(now.getDate()) || 0) + todayMm);
   }
 
   const result: ChartBucket[] = [];
@@ -249,25 +221,17 @@ function bucketMonthByDay(
 function getYearMonthlyTotals(
   messages: ChannelMessage[],
   year: number,
-  todayMm?: number,
 ): Map<number, number> {
-  const now = new Date();
   const buckets: Map<number, number> = new Map();
   for (let m = 0; m <= 11; m++) {
     buckets.set(m, 0);
   }
 
   for (const msg of messages) {
-    if (!msg.data.date) continue;
-    const [y, m] = msg.data.date.split("-").map(Number);
-    if (y === year) {
-      buckets.set(m - 1, (buckets.get(m - 1) || 0) + (msg.data.total_mm || 0));
+    const rd = localDayOf(msg.data.timestamp);
+    if (rd.year === year) {
+      buckets.set(rd.month, (buckets.get(rd.month) || 0) + (msg.data.mm || 0));
     }
-  }
-
-  if (year === now.getFullYear() && todayMm != null) {
-    const cm = now.getMonth();
-    buckets.set(cm, (buckets.get(cm) || 0) + todayMm);
   }
 
   return buckets;
@@ -276,12 +240,11 @@ function getYearMonthlyTotals(
 function bucketYearByMonth(
   messages: ChannelMessage[],
   year: number,
-  todayMm?: number,
 ): ChartBucket[] {
   const now = new Date();
   const isCurrentYear = year === now.getFullYear();
   const lastMonth = isCurrentYear ? now.getMonth() : 11;
-  const buckets = getYearMonthlyTotals(messages, year, todayMm);
+  const buckets = getYearMonthlyTotals(messages, year);
 
   const result: ChartBucket[] = [];
   for (let m = 0; m <= lastMonth; m++) {
@@ -298,11 +261,10 @@ function bucketYearByMonth(
 function bucketYearCompare(
   messages: ChannelMessage[],
   years: number[],
-  todayMm?: number,
 ): {data: CompareChartBucket[]; keys: string[]} {
   const allBuckets = years.map((y) => ({
     key: String(y),
-    buckets: getYearMonthlyTotals(messages, y, todayMm),
+    buckets: getYearMonthlyTotals(messages, y),
   }));
 
   const result: CompareChartBucket[] = [];
@@ -319,13 +281,12 @@ function bucketYearCompare(
 function bucketMonthCompare(
   messages: ChannelMessage[],
   months: {year: number; month: number}[],
-  todayMm?: number,
 ): {data: CompareChartBucket[]; keys: string[]} {
   const maxDays = Math.max(...months.map((m) => new Date(m.year, m.month + 1, 0).getDate()));
   const keys = months.map((m) => `${MONTH_NAMES[m.month]} ${m.year}`);
 
   const allBuckets = months.map((m) => {
-    const data = bucketMonthByDay(messages, m.year, m.month, todayMm);
+    const data = bucketMonthByDay(messages, m.year, m.month);
     const map = new Map<number, number>();
     for (const d of data) {
       if (d.day != null) map.set(d.day, d.mm);
@@ -347,25 +308,17 @@ function bucketMonthCompare(
 function bucketAnnualTotals(
   messages: ChannelMessage[],
   years: number[],
-  todayMm?: number,
 ): ChartBucket[] {
-  const now = new Date();
   const buckets: Map<number, number> = new Map();
   for (const y of years) {
     buckets.set(y, 0);
   }
 
   for (const msg of messages) {
-    if (!msg.data.date) continue;
-    const y = parseInt(msg.data.date.split("-")[0], 10);
+    const y = localDayOf(msg.data.timestamp).year;
     if (buckets.has(y)) {
-      buckets.set(y, (buckets.get(y) || 0) + (msg.data.total_mm || 0));
+      buckets.set(y, (buckets.get(y) || 0) + (msg.data.mm || 0));
     }
-  }
-
-  const currentYear = now.getFullYear();
-  if (buckets.has(currentYear) && todayMm != null) {
-    buckets.set(currentYear, (buckets.get(currentYear) || 0) + todayMm);
   }
 
   const sorted = [...years].sort((a, b) => a - b);
@@ -386,10 +339,8 @@ function getAvailableMonths(messages: ChannelMessage[]): {year: number; month: n
   set.add(`${now.getFullYear()}-${now.getMonth()}`);
 
   for (const msg of messages) {
-    if (msg.data.date) {
-      const [y, m] = msg.data.date.split("-").map(Number);
-      set.add(`${y}-${m - 1}`);
-    }
+    const rd = localDayOf(msg.data.timestamp);
+    set.add(`${rd.year}-${rd.month}`);
   }
 
   return Array.from(set)
@@ -406,10 +357,7 @@ function getAvailableYears(messages: ChannelMessage[]): number[] {
   set.add(now.getFullYear());
 
   for (const msg of messages) {
-    if (msg.data.date) {
-      const y = parseInt(msg.data.date.split("-")[0], 10);
-      set.add(y);
-    }
+    set.add(localDayOf(msg.data.timestamp).year);
   }
 
   return Array.from(set).sort((a, b) => b - a);
@@ -427,7 +375,8 @@ function ChartTooltip({active, payload, label, tooltipContext}: any) {
   if (tooltipContext === "year" && entry?.year != null) {
     displayLabel = `${label} ${entry.year}`;
   } else if (tooltipContext === "month" && entry?.year != null && entry?.month != null && entry?.day != null) {
-    displayLabel = `${entry.day} ${MONTH_NAMES[entry.month]} ${entry.year}`;
+    const weekday = WEEKDAY_NAMES[new Date(entry.year, entry.month, entry.day).getDay()];
+    displayLabel = `${weekday} ${entry.day} ${MONTH_NAMES[entry.month]} ${entry.year}`;
   }
 
   if (payload.length > 1) {
@@ -577,67 +526,28 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
   const [compareYears, setCompareYears] = useState<string[]>([]);
   const [compareMonths, setCompareMonths] = useState<string[]>([]);
 
-  // Get today's live rainfall from the app's `since_9am` tag value.
-  const tagValues = useAgentChannel(agentId, "tag_values");
-  const todayMm: number | undefined =
-    (tagValues.data as any)?.[appKey]?.since_9am;
+  // Every chart is summed from raw `pulse` events — the ground truth for how
+  // much rain fell and when. The daily/monthly/annual bars used to read the
+  // device's pre-aggregated `daily` totals, but those are computed on-device at
+  // the 9am reset and drift when the gauge sleeps/wakes; summing pulses instead
+  // keeps the whole widget consistent and accurate.
+  const pulseQuery = useChannelMessages({agentId, channelName: appKey}, {fields: ["pulse"], limit: 1500});
 
-  // Track which data types have been requested — sticky once enabled
-  const [pulsesEnabled, setPulsesEnabled] = useState(true); // hourly is the default tab
-  const [dailyEnabled, setDailyEnabled] = useState(false);
-
+  // The monthly/annual views and the month/year selectors need the full pulse
+  // history, so page through every message to exhaustion.
   useEffect(() => {
-    if (activeTab === "hourly") setPulsesEnabled(true);
-    else setDailyEnabled(true);
-  }, [activeTab]);
-
-  const activeChannel = {agentId, channelName: appKey};
-  const disabledChannel = {agentId: undefined, channelName: undefined};
-
-  const pulseQuery = useChannelMessages(pulsesEnabled ? activeChannel : disabledChannel, {fields: ["pulse"], limit: 500});
-  const dailyQuery = useChannelMessages(dailyEnabled ? activeChannel : disabledChannel, {fields: ["daily"], limit: 500});
-
-  // Auto-fetch pages, but stop pulse fetching once we've covered the selected day
-  const dayStartMs = useMemo(() => getDayWindow(selectedDay).start9am.getTime(), [selectedDay]);
-
-  useEffect(() => {
-    if (activeTab === "hourly") {
-      if (pulseQuery.hasNextPage && !pulseQuery.isFetchingNextPage) {
-        // Check if the oldest fetched pulse is already before the day's start
-        const pages = pulseQuery.data?.pages;
-        if (pages && pages.length > 0) {
-          const lastPage = pages[pages.length - 1];
-          if (lastPage && lastPage.length > 0) {
-            const oldest = normalizeMessage(lastPage[lastPage.length - 1]);
-            if (oldest && oldest.data.timestamp < dayStartMs) {
-              return; // We've fetched past the start of this day
-            }
-          }
-        }
-        pulseQuery.fetchNextPage();
-      }
-    } else {
-      if (dailyQuery.hasNextPage && !dailyQuery.isFetchingNextPage) {
-        dailyQuery.fetchNextPage();
-      }
+    if (pulseQuery.hasNextPage && !pulseQuery.isFetchingNextPage) {
+      pulseQuery.fetchNextPage();
     }
-  }, [
-    activeTab, dayStartMs,
-    pulseQuery.hasNextPage, pulseQuery.isFetchingNextPage, pulseQuery.data,
-    dailyQuery.hasNextPage, dailyQuery.isFetchingNextPage,
-  ]);
+  }, [pulseQuery.hasNextPage, pulseQuery.isFetchingNextPage]);
 
   const pulseMessages = useMemo(
     () => normalizeMessages(pulseQuery.data, "pulse"),
     [pulseQuery.data],
   );
-  const dailyMessages = useMemo(
-    () => normalizeMessages(dailyQuery.data, "daily"),
-    [dailyQuery.data],
-  );
 
-  const availableMonths = useMemo(() => getAvailableMonths(dailyMessages), [dailyMessages]);
-  const availableYears = useMemo(() => getAvailableYears(dailyMessages), [dailyMessages]);
+  const availableMonths = useMemo(() => getAvailableMonths(pulseMessages), [pulseMessages]);
+  const availableYears = useMemo(() => getAvailableYears(pulseMessages), [pulseMessages]);
 
   const monthOptions = useMemo(
     () => availableMonths.map((m) => `${m.year}-${m.month}`),
@@ -660,20 +570,20 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
       case "month": {
         if (effectiveCompareMonths.length > 0) return [];
         const [y, m] = effectiveMonth.split("-").map(Number);
-        return bucketMonthByDay(dailyMessages, y, m, todayMm);
+        return bucketMonthByDay(pulseMessages, y, m);
       }
       case "year":
         if (effectiveCompareYears.length > 0) return [];
-        return bucketYearByMonth(dailyMessages, parseInt(effectiveYear, 10), todayMm);
+        return bucketYearByMonth(pulseMessages, parseInt(effectiveYear, 10));
       case "annual":
-        return bucketAnnualTotals(dailyMessages, availableYears, todayMm);
+        return bucketAnnualTotals(pulseMessages, availableYears);
     }
-  }, [pulseMessages, dailyMessages, activeTab, selectedDay, effectiveMonth, effectiveYear, effectiveCompareYears, effectiveCompareMonths, availableYears, todayMm]);
+  }, [pulseMessages, activeTab, selectedDay, effectiveMonth, effectiveYear, effectiveCompareYears, effectiveCompareMonths, availableYears]);
 
   const compareData = useMemo(() => {
     if (activeTab === "year" && effectiveCompareYears.length > 0) {
       const allYears = [parseInt(effectiveYear, 10), ...effectiveCompareYears.map((y) => parseInt(y, 10))];
-      return bucketYearCompare(dailyMessages, allYears, todayMm);
+      return bucketYearCompare(pulseMessages, allYears);
     }
     if (activeTab === "month" && effectiveCompareMonths.length > 0) {
       const primary = effectiveMonth.split("-").map(Number);
@@ -684,10 +594,10 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
           return {year: y, month: mo};
         }),
       ];
-      return bucketMonthCompare(dailyMessages, allMonths, todayMm);
+      return bucketMonthCompare(pulseMessages, allMonths);
     }
     return null;
-  }, [dailyMessages, activeTab, effectiveYear, effectiveCompareYears, effectiveMonth, effectiveCompareMonths, todayMm]);
+  }, [pulseMessages, activeTab, effectiveYear, effectiveCompareYears, effectiveMonth, effectiveCompareMonths]);
 
   const total = useMemo(() => {
     if (compareData) {
@@ -733,10 +643,9 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
     }
   };
 
-  const activeQuery = activeTab === "hourly" ? pulseQuery : dailyQuery;
-  const stillLoading = activeQuery.isLoading || activeQuery.isFetchingNextPage;
+  const stillLoading = pulseQuery.isLoading || pulseQuery.isFetchingNextPage;
 
-  if (activeQuery.isLoading && !activeQuery.data?.pages?.length) {
+  if (pulseQuery.isLoading && !pulseQuery.data?.pages?.length) {
     return (
       <div className="p-4 text-sm text-muted-foreground">
         Loading rainfall data...

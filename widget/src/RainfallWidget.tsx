@@ -2,8 +2,7 @@ import "./styles.css";
 import {useState, useMemo, useEffect} from "react";
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import {useRemoteParams} from "customer_site/useRemoteParams";
-import {peekDooverClient} from "doover-js";
-import {DooverProvider, useChannelMessages} from "doover-js/react";
+import {useChannelMessages} from "doover-js/react";
 import {
   BarChart,
   Bar,
@@ -849,21 +848,13 @@ function RainfallWidgetInner({uiElement}: {uiElement: UiRemoteComponentRainfall}
 // Wrapper
 // ---------------------------------------------------------------------------
 
-const RainfallWidget = (props: any) => {
-  // This widget bundles its own copy of doover-js (it isn't shared with the
-  // host — see rsbuild.config.ts), so it must establish its own DooverProvider
-  // wired to the host's live DooverClient. Relying on the host's own
-  // <DooverProvider> wouldn't work: that context belongs to the host's copy of
-  // doover-js, which our bundled hooks can't read. The QueryClient still comes
-  // from RemoteComponentWrapper (shared @tanstack/react-query singleton).
-  const dooverClient = peekDooverClient();
-  return (
-    <RemoteComponentWrapper>
-      <DooverProvider client={dooverClient}>
-        <RainfallWidgetInner {...props} />
-      </DooverProvider>
-    </RemoteComponentWrapper>
-  );
-};
+// The query client and doover context both come from the host via
+// RemoteComponentWrapper — doover-js is a shared singleton (rsbuild.config.ts),
+// so the widget's hooks read the host's live DooverClient directly.
+const RainfallWidget = (props: any) => (
+  <RemoteComponentWrapper>
+    <RainfallWidgetInner {...props} />
+  </RemoteComponentWrapper>
+);
 
 export default RainfallWidget;

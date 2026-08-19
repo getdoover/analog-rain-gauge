@@ -6,8 +6,10 @@ import ConcatenatePlugin from './ConcatenatePlugin.ts';
 const mfConfig = createModuleFederationConfig({
     name: 'RainfallWidget',
     remotes: {
-        doover_admin: 'doover_admin@[window.dooverCustomerSite_remoteUrl]',
-        customer_site: 'customer_site@[window.dooverAdminSite_remoteUrl]',
+        // The actual URLs are injected by the host at runtime
+        // (window.dooverAdminSite_remoteUrl / window.dooverCustomerSite_remoteUrl).
+        doover_admin: 'doover_admin@[window.dooverAdminSite_remoteUrl]',
+        customer_site: 'customer_site@[window.dooverCustomerSite_remoteUrl]',
     },
     exposes: {
         './RainfallWidget': './src/RainfallWidget',
@@ -15,13 +17,12 @@ const mfConfig = createModuleFederationConfig({
     shared: {
         react: {singleton: true, requiredVersion: '^18.3.1', eager: true},
         'react-dom': {singleton: true, requiredVersion: '^18.3.1', eager: true},
-        // fixme: doover-js is bundled (not shared) so the widget gets >=0.4.9 —
-        // switch it back to a shared singleton once customer-site is on >0.4.9.
-        '@tanstack/react-query': {
-            singleton: true,
-            eager: true,
-            requiredVersion: false,
-        },
+        'react-router': {singleton: true, requiredVersion: false, eager: true},
+        // Share doover-js (and its react entrypoint) so the widget uses the
+        // host's DooverClient instance — same WebSocket, same query cache.
+        'doover-js': {singleton: true, eager: true, requiredVersion: false},
+        'doover-js/react': {singleton: true, eager: true, requiredVersion: false},
+        '@tanstack/react-query': {singleton: true, eager: true, requiredVersion: false},
     },
 });
 

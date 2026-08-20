@@ -181,3 +181,6 @@ dashboard-widget/node_modules
 packages_export
 package.zip
 requirements.txt
+
+!widget/src/lib/
+!widget/src/lib/**

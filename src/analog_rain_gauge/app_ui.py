@@ -4,13 +4,11 @@ from pydoover import ui
 
 from .app_tags import AnalogRainGaugeTags
 
-WIDGET_URL = "https://getdoover.github.io/analog-rain-gauge/RainfallWidget.js"
-
 
 class AnalogRainGaugeUI(ui.UI):
     widget = ui.RemoteComponent(
         "Rainfall Chart",
-        component_url=WIDGET_URL,
+        component_url="$config.app().dv_widget_url",
         scope="RainfallWidget",
         module="./RainfallWidget",
         app_key="$config.app().APP_KEY",

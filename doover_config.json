@@ -40,6 +40,7 @@
             "Architectures": [
                 "arm64"
             ]
-        }
+        },
+        "icon_url": "https://cdn.jsdelivr.net/gh/getdoover/app-icons@377ec4c6335304692999f5f47e989e127df1e670/icons/analog_rain_gauge_dashboard.png"
     }
 }

@@ -12,9 +12,10 @@ been granted access to into a single view:
   readings are the source of truth).
 - **Per-gauge table** — rain total, last-seen and reporting status per gauge.
 - **Rainfall over time** — farm-average daily rainfall across the window.
-- **BOM radar** — rain radar over the map, played back across the selected
-  window: the local radar site when zoomed in, BOM's national mosaic when
-  zoomed out.
+- **BOM radar** — rain radar over the map: the local radar site when zoomed
+  in, BOM's national mosaic when zoomed out. A time slider on the map steps
+  through the selected window, moving the radar and each gauge's total (rain
+  from the window start up to the slider) together.
 
 Periods: **Today** (live, from each gauge's since-9am tag) · **7 days** ·
 **30 days** (from each gauge's daily rainfall totals).
@@ -50,7 +51,9 @@ that long. Images are 3–7 KB each, about 430 a day.
 | **National Mosaic** | Also record `IDR00004`, shown when zoomed out | On |
 | **FTP Host / Username / Password** | BOM's anonymous feed by default; set for a Registered User feed | `ftp.bom.gov.au`, anonymous |
 
-The widget reprojects each image onto the map in the browser. Site images are
+The widget decodes each image into BOM's intensity levels, lightly smooths
+them (BOM draws the radar's bins as blocky cells), and draws the radar at
+screen resolution on every zoom or pan, so rain edges stay smooth. Site images are
 gnomonic, placed from BOM's corner coordinates
 (`radar_transparencies/coordinates/IDRnnnX.map`). The national mosaic has no
 published placement: it is Lambert conformal conic (18°S / 40°S, 134°E), with

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useAgentChannel, useDooverClient } from "doover-js/react";
 import { generateSnowflakeIdAtTime } from "doover-js";
 import dayjs from "dayjs";
@@ -7,7 +7,8 @@ import dayjs from "dayjs";
 import {
   RADAR_CHANNEL,
   projectionFor,
-  reproject,
+  decodeGrid,
+  type RadarGrid,
   toFrame,
   type RadarFrame,
   type RadarKind,
@@ -81,10 +82,12 @@ function imageQuery(
 ) {
   const proj = frame ? projectionFor(frame.kind, state) : null;
   return {
-    queryKey: ["bom-radar-image", frame?.id, frame?.kind === "local" ? state?.local?.product : "national"],
+    queryKey: ["bom-radar-grid", frame?.id, frame?.kind === "local" ? state?.local?.product : "national"],
     enabled: !!agentId && !!frame?.attachmentId && !!proj,
     staleTime: Infinity,
     gcTime: 30 * 60_000,
+    // Keep showing the last frame while the next one loads.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const blob = (await client.messages.getMessageAttachment(
         agentId!,
@@ -92,35 +95,20 @@ function imageQuery(
         frame!.id,
         frame!.attachmentId!,
       )) as Blob;
-      return reproject(blob, proj!);
+      return decodeGrid(blob, proj!);
     },
   };
 }
 
-/** A frame's reprojected overlay image (data URL) plus its bounds. */
-export function useRadarImage(
+/** A frame decoded into BOM intensity levels, ready for the map to draw. */
+export function useRadarGrid(
   agentId: string | undefined,
   frame: RadarFrame | null,
   state: RadarState | undefined,
-) {
+): RadarGrid | null {
   const client = useDooverClient();
   const q = useQuery(imageQuery(client, agentId, frame, state));
-  const proj = frame ? projectionFor(frame.kind, state) : null;
-  return {
-    url: q.data ?? null,
-    bounds: proj?.bounds ?? null,
-    isLoading: q.isLoading && q.fetchStatus !== "idle",
-    error: q.error,
-  };
-}
-
-/** Warm the cache for frames about to be shown (during playback). */
-export function usePrefetchRadar() {
-  const client = useDooverClient();
-  const qc: QueryClient = useQueryClient();
-  return (agentId: string | undefined, frames: RadarFrame[], state: RadarState | undefined) => {
-    for (const f of frames) void qc.prefetchQuery(imageQuery(client, agentId, f, state));
-  };
+  return frame ? q.data ?? null : null;
 }
 
 export type { RadarKind };

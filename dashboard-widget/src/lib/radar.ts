@@ -1,11 +1,11 @@
-// BOM radar images → Google Maps overlays.
+// BOM radar images → the map.
 //
 // The processor stores each BOM radar PNG as a `bom_radar` message attachment.
 // BOM images aren't in the map's projection: site images are gnomonic
 // (centred on the radar) and the national mosaic is Lambert conformal conic.
-// So each frame is reprojected here, pixel by pixel, onto a canvas that is
-// linear in Web Mercator — what a google.maps.GroundOverlay stretches between
-// its bounds — and BOM's burned-in header/footer text is dropped on the way.
+// Each frame is decoded here into a grid of BOM intensity levels (BOM's
+// burned-in header/footer text dropped), and the map's radar layer samples
+// that grid for every screen pixel it draws (see components/RadarLayer.ts).
 
 export const RADAR_CHANNEL = "bom_radar";
 
@@ -46,13 +46,12 @@ export interface LatLngBox {
   west: number;
 }
 
-interface SourceProjection {
+export interface SourceProjection {
   /** lon/lat (degrees) → source image pixel (may be out of range). */
   toPixel(lon: number, lat: number): [number, number];
   /** Drop BOM's text overlays (header bar, timestamps, copyright). */
   isText(px: number, py: number, r: number, g: number, b: number): boolean;
   bounds: LatLngBox;
-  outWidth: number;
 }
 
 const D2R = Math.PI / 180;
@@ -96,7 +95,6 @@ function siteProjection(map: RadarMap): SourceProjection {
       east: Math.max(...lons) + padLon,
       west: Math.min(...lons) - padLon,
     },
-    outWidth: 640,
   };
 }
 
@@ -128,7 +126,6 @@ const nationalProjection: SourceProjection = {
     return py >= 488 && px >= 320;
   },
   bounds: { north: -5.5, south: -44.5, east: 161, west: 106 },
-  outWidth: 900,
 };
 
 export function projectionFor(kind: RadarKind, state: RadarState | undefined): SourceProjection | null {
@@ -137,12 +134,58 @@ export function projectionFor(kind: RadarKind, state: RadarState | undefined): S
   return map ? siteProjection(map) : null;
 }
 
-// --- Reprojection ---------------------------------------------------------
-const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * D2R) / 2));
-const invMercY = (y: number) => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / D2R;
+// --- Intensity grids ------------------------------------------------------
+// BOM's radar reflectivity levels, light → heavy. Every rain pixel in a BOM
+// image is one of these; anything else (text, borders) is ignored.
+export const RADAR_LEVELS: [number, number, number][] = [
+  [245, 245, 255], [180, 180, 255], [120, 120, 255], [20, 20, 255], [0, 216, 195],
+  [0, 150, 144], [0, 102, 102], [255, 255, 0], [255, 200, 0], [255, 150, 0],
+  [255, 100, 0], [255, 0, 0], [200, 0, 0], [120, 0, 0], [40, 0, 0],
+];
+const LEVEL_OF = new Map(RADAR_LEVELS.map(([r, g, b], i) => [(r << 16) | (g << 8) | b, i + 1]));
 
-/** Reproject a BOM PNG into a Web-Mercator-linear PNG data URL over `proj.bounds`. */
-export async function reproject(blob: Blob, proj: SourceProjection): Promise<string> {
+/** A decoded frame: smoothed BOM intensity level (0 = dry, 1–15) per source pixel. */
+export interface RadarGrid {
+  levels: Float32Array; // SRC_SIZE × SRC_SIZE
+  proj: SourceProjection;
+}
+
+// BOM draws the radar's polar bins as blocks several pixels wide; a light
+// Gaussian (two passes of a 1-4-6-4-1 kernel, σ ≈ 1.4 px) rounds them into
+// rain bands without shifting where the rain is.
+const KERNEL = [1, 4, 6, 4, 1].map((k) => k / 16);
+function blur(src: Float32Array, passes: number): Float32Array {
+  let a: Float32Array = src;
+  let b: Float32Array = new Float32Array(a.length);
+  const N = SRC_SIZE;
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        let v = 0;
+        for (let k = -2; k <= 2; k++) {
+          const xx = x + k;
+          if (xx >= 0 && xx < N) v += a[y * N + xx] * KERNEL[k + 2];
+        }
+        b[y * N + x] = v;
+      }
+    }
+    [a, b] = [b, a];
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        let v = 0;
+        for (let k = -2; k <= 2; k++) {
+          const yy = y + k;
+          if (yy >= 0 && yy < N) v += a[yy * N + x] * KERNEL[k + 2];
+        }
+        b[y * N + x] = v;
+      }
+    }
+    [a, b] = [b, a];
+  }
+  return a;
+}
+
+export async function decodeGrid(blob: Blob, proj: SourceProjection): Promise<RadarGrid> {
   const bitmap = await createImageBitmap(blob);
   const src = document.createElement("canvas");
   src.width = bitmap.width;
@@ -152,43 +195,66 @@ export async function reproject(blob: Blob, proj: SourceProjection): Promise<str
   bitmap.close?.();
   const sw = src.width, sh = src.height;
   const sdata = sctx.getImageData(0, 0, sw, sh).data;
-  const scaleX = sw / SRC_SIZE, scaleY = sh / SRC_SIZE;
-
-  const { north, south, east, west } = proj.bounds;
-  const yTop = mercY(north), yBottom = mercY(south);
-  const W = proj.outWidth;
-  const H = Math.max(1, Math.round((W * (yTop - yBottom)) / ((east - west) * D2R)));
-  const out = document.createElement("canvas");
-  out.width = W;
-  out.height = H;
-  const octx = out.getContext("2d")!;
-  const img = octx.createImageData(W, H);
-  const od = img.data;
-
-  const lons = new Float64Array(W);
-  for (let i = 0; i < W; i++) lons[i] = west + ((i + 0.5) / W) * (east - west);
-
-  for (let j = 0; j < H; j++) {
-    const lat = invMercY(yTop + ((j + 0.5) / H) * (yBottom - yTop));
-    for (let i = 0; i < W; i++) {
-      const [fx, fy] = proj.toPixel(lons[i], lat);
-      const px = Math.floor(fx), py = Math.floor(fy);
-      if (px < 0 || py < 0 || px >= SRC_SIZE || py >= SRC_SIZE) continue;
-      const si = (Math.floor(py * scaleY) * sw + Math.floor(px * scaleX)) * 4;
-      const a = sdata[si + 3];
-      if (a === 0) continue;
+  const levels = new Float32Array(SRC_SIZE * SRC_SIZE);
+  for (let py = 0; py < SRC_SIZE; py++) {
+    for (let px = 0; px < SRC_SIZE; px++) {
+      const si = (Math.floor((py * sh) / SRC_SIZE) * sw + Math.floor((px * sw) / SRC_SIZE)) * 4;
+      if (sdata[si + 3] === 0) continue;
       const r = sdata[si], g = sdata[si + 1], b = sdata[si + 2];
       if (proj.isText(px, py, r, g, b)) continue;
-      const oi = (j * W + i) * 4;
-      od[oi] = r;
-      od[oi + 1] = g;
-      od[oi + 2] = b;
-      od[oi + 3] = a;
+      levels[py * SRC_SIZE + px] = LEVEL_OF.get((r << 16) | (g << 8) | b) ?? 0;
     }
   }
-  octx.putImageData(img, 0, 0);
-  return out.toDataURL("image/png");
+  return { levels: blur(levels, 2), proj };
 }
+
+/**
+ * Intensity at a point, bilinearly blended between the four nearest BOM
+ * pixels so rain edges are smooth at any zoom (0 outside the image).
+ */
+export function sampleGrid(grid: RadarGrid, lon: number, lat: number): number {
+  const b = grid.proj.bounds;
+  if (lat > b.north || lat < b.south || lon > b.east || lon < b.west) return 0;
+  const [fx, fy] = grid.proj.toPixel(lon, lat);
+  const x = fx - 0.5, y = fy - 0.5;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  if (x0 < -1 || y0 < -1 || x0 >= SRC_SIZE || y0 >= SRC_SIZE) return 0;
+  const tx = x - x0, ty = y - y0;
+  const L = grid.levels;
+  const at = (xx: number, yy: number) =>
+    xx < 0 || yy < 0 || xx >= SRC_SIZE || yy >= SRC_SIZE ? 0 : L[yy * SRC_SIZE + xx];
+  return (
+    (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) +
+    (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty
+  );
+}
+
+// Blended intensity → RGBA. Light rain is drawn more transparent so BOM's
+// near-white low levels read as drizzle over satellite imagery, not haze, and
+// the dry edge is feathered rather than cut.
+const DRY = 0.35;
+// Drawn colours: BOM's palette, except its two near-white lightest levels,
+// which vanish into satellite imagery, are tinted blue.
+const DRAWN_LEVELS: [number, number, number][] = RADAR_LEVELS.map((c, i) =>
+  i === 0 ? [175, 195, 255] : i === 1 ? [135, 155, 255] : c,
+);
+export const RADAR_RGBA: Uint8ClampedArray = (() => {
+  // 256 steps across 0..15.
+  const out = new Uint8ClampedArray(256 * 4);
+  for (let k = 0; k < 256; k++) {
+    const v = (k / 255) * RADAR_LEVELS.length;
+    if (v < DRY) continue;
+    const lvl = Math.min(RADAR_LEVELS.length, Math.max(1, Math.round(v)));
+    const [r, g, bl] = DRAWN_LEVELS[lvl - 1];
+    const strength = Math.min(1, 0.4 + 0.12 * (lvl - 1)); // 0.4 light → 1 heavy
+    const edge = v >= 1 ? 1 : (v - DRY) / (1 - DRY);
+    out.set([r, g, bl, Math.round(255 * strength * edge)], k * 4);
+  }
+  return out;
+})();
+
+export const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * D2R) / 2));
+export const invMercY = (y: number) => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / D2R;
 
 // --- Messages ---------------------------------------------------------------
 interface RawRadarMessage {

@@ -5,6 +5,9 @@ import GoogleMap, {
   type onGoogleApiLoadedProps,
 } from "google-maps-react-markers";
 
+import type { RadarGrid } from "../lib/radar";
+import { createRadarLayer, type RadarLayerHandle } from "./RadarLayer";
+
 // Doover's shared Google Maps JS API key (same one the admin site uses).
 const GOOGLE_MAPS_API_KEY = "AIzaSyDZ_rSbTPIh_JbUJVjFAOkoCk-OuIrL01U";
 
@@ -19,14 +22,9 @@ export interface MapGauge {
   reporting: boolean;
 }
 
-export interface RadarOverlayImage {
-  url: string;
-  bounds: { north: number; south: number; east: number; west: number };
-}
-
 export interface RadarOverlay {
-  local: RadarOverlayImage | null;
-  national: RadarOverlayImage | null;
+  local: RadarGrid | null;
+  national: RadarGrid | null;
   opacity: number; // 0..1
   /** Zoom at or above which the local radar is shown instead of the national mosaic. */
   localMinZoom: number;
@@ -38,16 +36,20 @@ interface RainfallMapProps {
   radar?: RadarOverlay | null;
   /** Reports which radar layer the current zoom selects. */
   onRadarLayerChange?: (layer: "local" | "national") => void;
+  /** Drawn over the map (e.g. the time slider). */
+  children?: React.ReactNode;
 }
 
-export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerChange }: RainfallMapProps) {
+// Gauge names only once zoomed in far enough that they don't pile up.
+const NAME_MIN_ZOOM = 11;
+
+export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerChange, children }: RainfallMapProps) {
   const mapRef = useRef<GMap | null>(null);
   const mapsRef = useRef<MapsLibrary | null>(null);
   const didFitRef = useRef(false);
   const [zoom, setZoom] = useState<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
-  const overlayRef = useRef<google.maps.GroundOverlay | null>(null);
-  const overlayUrlRef = useRef<string | null>(null);
+  const radarLayerRef = useRef<RadarLayerHandle | null>(null);
 
   const fitToGauges = (gs: MapGauge[]) => {
     const map = mapRef.current;
@@ -91,7 +93,7 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
   useEffect(() => {
     onRadarLayerChange?.(layer);
   }, [layer, onRadarLayerChange]);
-  const image = radar
+  const grid = radar
     ? layer === "local"
       ? radar.local ?? radar.national
       : radar.national ?? radar.local
@@ -101,29 +103,12 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
     const map = mapRef.current;
     const maps = mapsRef.current as unknown as typeof google.maps | null;
     if (!mapReady || !map || !maps) return;
-    const current = overlayRef.current;
-    if (!image) {
-      current?.setMap(null);
-      overlayRef.current = null;
-      overlayUrlRef.current = null;
-      return;
-    }
-    if (current && overlayUrlRef.current === image.url) {
-      current.setOpacity(radar?.opacity ?? 0.7);
-      return;
-    }
-    // GroundOverlay's image and bounds are fixed, so swap in a new one.
-    const next = new maps.GroundOverlay(image.url, image.bounds, {
-      clickable: false,
-      opacity: radar?.opacity ?? 0.7,
-    });
-    next.setMap(map as unknown as google.maps.Map);
-    current?.setMap(null);
-    overlayRef.current = next;
-    overlayUrlRef.current = image.url;
-  }, [mapReady, image?.url, image?.bounds, radar?.opacity]);
+    radarLayerRef.current ??= createRadarLayer(map as unknown as google.maps.Map, maps);
+    radarLayerRef.current.setOpacity(radar?.opacity ?? 0.75);
+    radarLayerRef.current.setGrid(grid);
+  }, [mapReady, grid, radar?.opacity]);
 
-  useEffect(() => () => overlayRef.current?.setMap(null), []);
+  useEffect(() => () => radarLayerRef.current?.remove(), []);
 
   const mapOptions = {
     mapTypeControl: false,
@@ -149,45 +134,48 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
         onGoogleApiLoaded={onGoogleApiLoaded}
       >
         {gauges.map((g) => (
-          <GaugePin key={g.id} lat={g.lat} lng={g.lng} gauge={g} />
+          <GaugePin key={g.id} lat={g.lat} lng={g.lng} gauge={g} showName={(zoom ?? 0) >= NAME_MIN_ZOOM} />
         ))}
       </GoogleMap>
+      {children}
     </div>
   );
 }
 
 // `google-maps-react-markers` positions any child carrying `lat`/`lng` props at
-// that coordinate; the extra props are ignored by the library and used by us.
-function GaugePin({ gauge }: { lat: number; lng: number; gauge: MapGauge }) {
+// that coordinate, centring the child's box on it; the extra props are ignored
+// by the library and used by us. The pin's box is zero-sized so the dot sits
+// exactly on the gauge at every zoom, with the labels hung above and below it.
+function GaugePin({ gauge, showName }: { lat: number; lng: number; gauge: MapGauge; showName: boolean }) {
+  const DOT = 16;
   return (
-    <div
-      style={{
-        transform: "translate(-50%, -50%)",
-        pointerEvents: "none",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        whiteSpace: "nowrap",
-      }}
-      title={gauge.name}
-    >
+    <div style={{ position: "relative", width: 0, height: 0, pointerEvents: "none" }} title={gauge.name}>
       <div
         style={{
-          marginBottom: 4,
+          position: "absolute",
+          left: 0,
+          bottom: DOT / 2 + 4,
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
           background: "rgba(11,18,32,.84)",
           color: "#fff",
           borderRadius: 999,
           padding: "2px 9px",
           fontSize: 12,
           fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
         }}
       >
         {gauge.mmLabel} mm
       </div>
       <div
         style={{
-          width: 16,
-          height: 16,
+          position: "absolute",
+          left: -DOT / 2,
+          top: -DOT / 2,
+          width: DOT,
+          height: DOT,
+          boxSizing: "border-box",
           borderRadius: 999,
           background: gauge.color,
           border: "2px solid #fff",
@@ -195,17 +183,23 @@ function GaugePin({ gauge }: { lat: number; lng: number; gauge: MapGauge }) {
           opacity: gauge.reporting ? 1 : 0.55,
         }}
       />
-      <div
-        style={{
-          marginTop: 3,
-          fontSize: 11,
-          color: "#fff",
-          fontWeight: 600,
-          textShadow: "0 1px 2px rgba(0,0,0,.9)",
-        }}
-      >
-        {gauge.name}
-      </div>
+      {showName && (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: DOT / 2 + 3,
+            transform: "translateX(-50%)",
+            whiteSpace: "nowrap",
+            fontSize: 11,
+            color: "#fff",
+            fontWeight: 600,
+            textShadow: "0 1px 2px rgba(0,0,0,.9)",
+          }}
+        >
+          {gauge.name}
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import GoogleMap, {
 
 import type { RadarGrid } from "../lib/radar";
 import { createRadarLayer, type RadarLayerHandle } from "./RadarLayer";
+import { createRainViewerLayer, type RainViewerLayerHandle } from "./RainViewerLayer";
 
 // Doover's shared Google Maps JS API key (same one the admin site uses).
 const GOOGLE_MAPS_API_KEY = "AIzaSyDZ_rSbTPIh_JbUJVjFAOkoCk-OuIrL01U";
@@ -23,6 +24,10 @@ export interface MapGauge {
 }
 
 export interface RadarOverlay {
+  /** RainViewer tile URL template for the shown time; when set it replaces the BOM grids. */
+  tiles: string | null;
+  /** Other RainViewer frames whose tiles to load ahead, so scrubbing is instant. */
+  tilePreload: string[];
   local: RadarGrid | null;
   national: RadarGrid | null;
   opacity: number; // 0..1
@@ -50,6 +55,7 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
   const [zoom, setZoom] = useState<number | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const radarLayerRef = useRef<RadarLayerHandle | null>(null);
+  const tileLayerRef = useRef<RainViewerLayerHandle | null>(null);
 
   const fitToGauges = (gs: MapGauge[]) => {
     const map = mapRef.current;
@@ -93,7 +99,8 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
   useEffect(() => {
     onRadarLayerChange?.(layer);
   }, [layer, onRadarLayerChange]);
-  const grid = radar
+  const tiles = radar?.tiles ?? null;
+  const grid = radar && !tiles
     ? layer === "local"
       ? radar.local ?? radar.national
       : radar.national ?? radar.local
@@ -106,9 +113,19 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
     radarLayerRef.current ??= createRadarLayer(map as unknown as google.maps.Map, maps);
     radarLayerRef.current.setOpacity(radar?.opacity ?? 0.75);
     radarLayerRef.current.setGrid(grid);
-  }, [mapReady, grid, radar?.opacity]);
+    tileLayerRef.current ??= createRainViewerLayer(map as unknown as google.maps.Map, maps);
+    tileLayerRef.current.setOpacity(radar?.opacity ?? 0.75);
+    tileLayerRef.current.setTemplate(tiles);
+    tileLayerRef.current.setPreload(tiles ? radar?.tilePreload ?? [] : []);
+  }, [mapReady, grid, tiles, radar?.tilePreload, radar?.opacity]);
 
-  useEffect(() => () => radarLayerRef.current?.remove(), []);
+  useEffect(
+    () => () => {
+      radarLayerRef.current?.remove();
+      tileLayerRef.current?.remove();
+    },
+    [],
+  );
 
   const mapOptions = {
     mapTypeControl: false,

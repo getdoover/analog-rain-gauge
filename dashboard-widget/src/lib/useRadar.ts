@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAgentChannel, useDooverClient } from "doover-js/react";
 import { generateSnowflakeIdAtTime } from "doover-js";
 import dayjs from "dayjs";
@@ -109,6 +109,15 @@ export function useRadarGrid(
   const client = useDooverClient();
   const q = useQuery(imageQuery(client, agentId, frame, state));
   return frame ? q.data ?? null : null;
+}
+
+/** Fetch and decode frames ahead of time (cached like useRadarGrid). */
+export function usePrefetchRadar() {
+  const client = useDooverClient();
+  const qc = useQueryClient();
+  return (agentId: string | undefined, frames: RadarFrame[], state: RadarState | undefined) => {
+    for (const f of frames) void qc.prefetchQuery(imageQuery(client, agentId, f, state));
+  };
 }
 
 export type { RadarKind };

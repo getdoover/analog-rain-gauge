@@ -1,6 +1,6 @@
 import "./styles.css";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import { useRemoteParams } from "customer_site/useRemoteParams";
@@ -31,7 +31,8 @@ import {
 import RainfallMap, { type MapGauge, type RadarOverlay } from "./components/RainfallMap";
 import MapTimeSlider from "./components/MapTimeSlider";
 import { frameAt, type RadarFrame } from "./lib/radar";
-import { useRadarFrames, useRadarGrid } from "./lib/useRadar";
+import { usePrefetchRadar, useRadarFrames, useRadarGrid } from "./lib/useRadar";
+import { rainViewerFrameAt, useRainViewerFrames } from "./lib/rainviewer";
 import RainfallTimeline, { type TimelineSeries } from "./components/RainfallTimeline";
 
 dayjs.extend(relativeTime);
@@ -69,10 +70,21 @@ const RADAR_OPACITY = 0.85;
 // Slider step.
 const SLIDER_STEP_MS = 5 * 60_000;
 
-function useDebounced<T>(value: T, ms: number): T {
+/** `value`, updated at most every `ms` while it keeps changing (first and last change always land). */
+function useThrottled<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
+  const last = useRef(0);
   useEffect(() => {
-    const id = window.setTimeout(() => setV(value), ms);
+    const wait = last.current + ms - Date.now();
+    if (wait <= 0) {
+      last.current = Date.now();
+      setV(value);
+      return;
+    }
+    const id = window.setTimeout(() => {
+      last.current = Date.now();
+      setV(value);
+    }, wait);
     return () => window.clearTimeout(id);
   }, [value, ms]);
   return v;
@@ -528,27 +540,49 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
   const [radarLayer, setRadarLayer] = useState<"local" | "national">("local");
   const onRadarLayerChange = useCallback((l: "local" | "national") => setRadarLayer(l), []);
 
-  // Images load for where the slider settles, not every step it's dragged past.
-  const radarTime = useDebounced(mapTime, 120);
+  // Follow the slider while it's dragged, but at most ~7 frames a second.
+  const radarTime = useThrottled(mapTime, 150);
   const localFrame = hasRadar ? radarFrameNear(radar.local, radarTime, "local") : null;
   const nationalFrame = hasRadar ? radarFrameNear(radar.national, radarTime, "national") : null;
-  const localGrid = useRadarGrid(agentId, localFrame, radar.state);
-  const nationalGrid = useRadarGrid(agentId, nationalFrame, radar.state);
+  // RainViewer for the last ~2 hours (smoother, pre-processed tiles); the
+  // stored BOM frames for anything older.
+  const { data: rvFrames } = useRainViewerFrames();
+  const rvFrame = rainViewerFrameAt(rvFrames, radarTime);
+  const rvTemplates = useMemo(() => (rvFrames ?? []).map((f) => f.template), [rvFrames]);
+
+  const localGrid = useRadarGrid(agentId, rvFrame ? null : localFrame, radar.state);
+  const nationalGrid = useRadarGrid(agentId, rvFrame ? null : nationalFrame, radar.state);
+
+  // Warm the frames either side of the slider so scrubbing doesn't wait on downloads.
+  const prefetchRadar = usePrefetchRadar();
+  useEffect(() => {
+    if (rvFrame) return; // the RainViewer layer preloads its own tiles
+    const near = (frames: RadarFrame[], f: RadarFrame | null) => {
+      const i = f ? frames.indexOf(f) : -1;
+      return i < 0 ? [] : frames.slice(Math.max(0, i - 3), i + 4);
+    };
+    prefetchRadar(agentId, [...near(radar.local, localFrame), ...near(radar.national, nationalFrame)], radar.state);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localFrame?.id, nationalFrame?.id, rvFrame?.time]);
 
   const radarRangeKm = radar.state?.local?.range_km ?? 128;
   const radarOverlay = useMemo<RadarOverlay | null>(() => {
-    if (!hasRadar) return null;
+    if (!hasRadar && !rvFrame) return null;
     return {
+      tiles: rvFrame?.template ?? null,
+      tilePreload: rvTemplates,
       local: localGrid,
       national: nationalGrid,
       opacity: RADAR_OPACITY,
       // Local image fills the view from about this zoom (128 km → 8).
       localMinZoom: Math.round(8 - Math.log2(radarRangeKm / 128)),
     };
-  }, [hasRadar, localGrid, nationalGrid, radarRangeKm]);
+  }, [hasRadar, rvFrame, rvTemplates, localGrid, nationalGrid, radarRangeKm]);
 
   const shownFrame = radarLayer === "local" ? localFrame ?? nationalFrame : nationalFrame ?? localFrame;
-  const radarNote = !hasRadar
+  const radarNote = rvFrame
+    ? `Radar ${dayjs(rvFrame.time).format("h:mm a")} · RainViewer`
+    : !hasRadar
     ? null
     : shownFrame
       ? `Radar ${dayjs(shownFrame.time).format("h:mm a")} · ${

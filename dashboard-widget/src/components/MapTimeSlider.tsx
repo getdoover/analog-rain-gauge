@@ -6,12 +6,14 @@ interface MapTimeSliderProps {
   value: number;
   step: number;
   onChange: (t: number) => void;
-  /** Small caption, e.g. the radar frame's time and source. */
+  /** Small caption, e.g. the radar frame's time. */
   note: string | null;
+  /** Data credit shown after the note, linked, with a hover tooltip. */
+  source?: { label: string; href: string; title: string } | null;
 }
 
 /** Time scrubber drawn over the bottom of the map. */
-export default function MapTimeSlider({ start, end, value, step, onChange, note }: MapTimeSliderProps) {
+export default function MapTimeSlider({ start, end, value, step, onChange, note, source }: MapTimeSliderProps) {
   const steps = Math.max(1, Math.round((end - start) / step));
   const idx = Math.round((value - start) / step);
   const atEnd = idx >= steps;
@@ -38,7 +40,23 @@ export default function MapTimeSlider({ start, end, value, step, onChange, note 
         <span style={{ fontSize: 12, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
           {atEnd && end >= Date.now() - step ? "Now" : dayjs(value).format("ddd D MMM h:mm a")}
         </span>
-        {note && <span style={{ fontSize: 10, opacity: 0.75, whiteSpace: "nowrap" }}>{note}</span>}
+        {(note || source) && (
+          <span style={{ fontSize: 10, opacity: 0.75, whiteSpace: "nowrap" }}>
+            {note}
+            {note && source && " · "}
+            {source && (
+              <a
+                href={source.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={source.title}
+                style={{ color: "inherit", textDecoration: "underline dotted", textUnderlineOffset: 2 }}
+              >
+                {source.label}
+              </a>
+            )}
+          </span>
+        )}
       </div>
       <input
         type="range"

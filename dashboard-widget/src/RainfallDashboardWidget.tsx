@@ -581,14 +581,19 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
 
   const shownFrame = radarLayer === "local" ? localFrame ?? nationalFrame : nationalFrame ?? localFrame;
   const radarNote = rvFrame
-    ? `Radar ${dayjs(rvFrame.time).format("h:mm a")} · RainViewer`
+    ? `Radar ${dayjs(rvFrame.time).format("h:mm a")}`
     : !hasRadar
     ? null
     : shownFrame
       ? `Radar ${dayjs(shownFrame.time).format("h:mm a")} · ${
           shownFrame.kind === "local" && radar.state?.local ? radar.state.local.name : "national"
-        } · BOM`
+        }`
       : "No radar at this time";
+  const radarSource = rvFrame
+    ? { label: "RainViewer", href: "https://www.rainviewer.com/", title: "Radar data © RainViewer (rainviewer.com)" }
+    : hasRadar && shownFrame
+      ? { label: "BOM", href: "https://www.bom.gov.au/", title: "Radar images © Commonwealth of Australia, Bureau of Meteorology" }
+      : null;
 
   if (cfgLoading || (deviceIds.length > 0 && (tagQuery.isLoading || pulseQuery.isLoading) && withData.length === 0)) {
     return <div style={{ padding: 16, fontSize: 14, color: "var(--muted-foreground)" }}>Loading rainfall data…</div>;
@@ -661,6 +666,7 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
                 step={SLIDER_STEP_MS}
                 onChange={(t) => setSliderTime(t >= mapWindow[1] ? null : t)}
                 note={radarNote}
+                source={radarSource}
               />
             </RainfallMap>
           )}

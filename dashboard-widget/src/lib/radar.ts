@@ -63,6 +63,8 @@ export interface SourceProjection {
   isText(px: number, py: number, r: number, g: number, b: number): boolean;
   /** Whether a source pixel is inside the area this image actually measures. */
   covers(px: number, py: number): boolean;
+  /** Smoothing passes when decoding (see blur): only for fine-pixelled images. */
+  blurPasses: number;
   bounds: LatLngBox;
 }
 
@@ -97,6 +99,7 @@ function siteProjection(map: RadarMap): SourceProjection {
       const [x, y] = gnomonic(lon, lat, lon0, lat0);
       return [((x - left) / (right - left)) * SRC_SIZE, ((top - y) / (top - bottom)) * SRC_SIZE];
     },
+    blurPasses: 3,
     covers(px, py) {
       // The radar sweeps a circle; the image corners outside it are no data.
       const dx = px - SRC_SIZE / 2, dy = py - SRC_SIZE / 2;
@@ -138,6 +141,9 @@ const nationalProjection: SourceProjection = {
     const y = -rho * Math.cos(th);
     return [NATIONAL_X0 + x / NATIONAL_KM_PER_PX, NATIONAL_Y0 - y / NATIONAL_KM_PER_PX];
   },
+  // 8.5 km pixels: blurring would smear a storm cell across ~30 km and wash
+  // its core out to drizzle, so the mosaic is only interpolated.
+  blurPasses: 0,
   covers(px, py) {
     return px >= 0 && py >= 0 && px < SRC_SIZE && py < SRC_SIZE;
   },
@@ -230,7 +236,7 @@ export async function decodeGrid(blob: Blob, proj: SourceProjection): Promise<Ra
       levels[py * SRC_SIZE + px] = LEVEL_OF.get((r << 16) | (g << 8) | b) ?? 0;
     }
   }
-  return { levels: blur(levels, 3), proj };
+  return { levels: proj.blurPasses ? blur(levels, proj.blurPasses) : levels, proj };
 }
 
 /**

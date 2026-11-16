@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import GoogleMap, {
   type Map as GMap,
   type MapsLibrary,
@@ -19,15 +19,35 @@ export interface MapGauge {
   reporting: boolean;
 }
 
+export interface RadarOverlayImage {
+  url: string;
+  bounds: { north: number; south: number; east: number; west: number };
+}
+
+export interface RadarOverlay {
+  local: RadarOverlayImage | null;
+  national: RadarOverlayImage | null;
+  opacity: number; // 0..1
+  /** Zoom at or above which the local radar is shown instead of the national mosaic. */
+  localMinZoom: number;
+}
+
 interface RainfallMapProps {
   gauges: MapGauge[];
   height?: number | string;
+  radar?: RadarOverlay | null;
+  /** Reports which radar layer the current zoom selects. */
+  onRadarLayerChange?: (layer: "local" | "national") => void;
 }
 
-export default function RainfallMap({ gauges, height = 540 }: RainfallMapProps) {
+export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerChange }: RainfallMapProps) {
   const mapRef = useRef<GMap | null>(null);
   const mapsRef = useRef<MapsLibrary | null>(null);
   const didFitRef = useRef(false);
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const overlayRef = useRef<google.maps.GroundOverlay | null>(null);
+  const overlayUrlRef = useRef<string | null>(null);
 
   const fitToGauges = (gs: MapGauge[]) => {
     const map = mapRef.current;
@@ -46,6 +66,9 @@ export default function RainfallMap({ gauges, height = 540 }: RainfallMapProps) 
   const onGoogleApiLoaded = ({ map, maps }: onGoogleApiLoadedProps) => {
     mapRef.current = map;
     mapsRef.current = maps as unknown as MapsLibrary;
+    setZoom(map.getZoom() ?? null);
+    map.addListener("zoom_changed", () => setZoom(map.getZoom() ?? null));
+    setMapReady(true);
     if (!didFitRef.current && gauges.length > 0) {
       fitToGauges(gauges);
       didFitRef.current = true;
@@ -60,6 +83,47 @@ export default function RainfallMap({ gauges, height = 540 }: RainfallMapProps) 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gauges]);
+
+  // Radar: the local site image when zoomed in, the national mosaic zoomed out
+  // (and whichever exists when only one does).
+  const layer: "local" | "national" =
+    radar && zoom != null && zoom >= radar.localMinZoom ? "local" : "national";
+  useEffect(() => {
+    onRadarLayerChange?.(layer);
+  }, [layer, onRadarLayerChange]);
+  const image = radar
+    ? layer === "local"
+      ? radar.local ?? radar.national
+      : radar.national ?? radar.local
+    : null;
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const maps = mapsRef.current as unknown as typeof google.maps | null;
+    if (!mapReady || !map || !maps) return;
+    const current = overlayRef.current;
+    if (!image) {
+      current?.setMap(null);
+      overlayRef.current = null;
+      overlayUrlRef.current = null;
+      return;
+    }
+    if (current && overlayUrlRef.current === image.url) {
+      current.setOpacity(radar?.opacity ?? 0.7);
+      return;
+    }
+    // GroundOverlay's image and bounds are fixed, so swap in a new one.
+    const next = new maps.GroundOverlay(image.url, image.bounds, {
+      clickable: false,
+      opacity: radar?.opacity ?? 0.7,
+    });
+    next.setMap(map as unknown as google.maps.Map);
+    current?.setMap(null);
+    overlayRef.current = next;
+    overlayUrlRef.current = image.url;
+  }, [mapReady, image?.url, image?.bounds, radar?.opacity]);
+
+  useEffect(() => () => overlayRef.current?.setMap(null), []);
 
   const mapOptions = {
     mapTypeControl: false,

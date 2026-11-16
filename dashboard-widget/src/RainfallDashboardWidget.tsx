@@ -1,6 +1,6 @@
 import "./styles.css";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import RemoteComponentWrapper from "customer_site/RemoteComponentWrapper";
 import { useRemoteParams } from "customer_site/useRemoteParams";
@@ -28,7 +28,10 @@ import {
   type Period,
   type PulseSample,
 } from "./lib/rainfall";
-import RainfallMap, { type MapGauge } from "./components/RainfallMap";
+import RainfallMap, { type MapGauge, type RadarOverlay } from "./components/RainfallMap";
+import RadarBar from "./components/RadarBar";
+import { frameAt, type RadarFrame } from "./lib/radar";
+import { usePrefetchRadar, useRadarFrames, useRadarImage } from "./lib/useRadar";
 import RainfallTimeline, { type TimelineSeries } from "./components/RainfallTimeline";
 
 dayjs.extend(relativeTime);
@@ -60,6 +63,18 @@ interface PulseMessage {
   timestamp?: number;
   channel?: { agent_id?: string };
   data?: { pulse?: { mm?: number; timestamp?: number } };
+}
+
+// Radar playback: one step per tick, at most ~150 steps across the window.
+const RADAR_TICK_MS = 350;
+const RADAR_MAX_STEPS = 150;
+// A frame only counts for a time if it's this recent (local every 5 min,
+// national every 10).
+const RADAR_MATCH_MS: Record<"local" | "national", number> = { local: 15 * 60_000, national: 25 * 60_000 };
+
+function radarFrameNear(frames: RadarFrame[], t: number, kind: "local" | "national"): RadarFrame | null {
+  const f = frameAt(frames, t);
+  return f && t - f.time <= RADAR_MATCH_MS[kind] ? f : null;
 }
 
 // Stable empty array so an unloaded query doesn't churn downstream memos.
@@ -471,6 +486,88 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
   // The full BOM rainfall-totals scale (every band) for the map legend.
   const legendCells = useMemo(() => BOM.map(([from, c]) => ({ color: rgb(c), from })), []);
 
+  // 5. BOM radar — frames the processor stored in `bom_radar`, played back over
+  //    the selected window. The map picks local vs national by zoom level.
+  const radar = useRadarFrames(agentId, windowStartMs);
+  const hasRadar = !!(radar.state?.local || radar.state?.national);
+  const [radarOn, setRadarOn] = useState(true);
+  const [radarPlaying, setRadarPlaying] = useState(false);
+  const [radarOpacity, setRadarOpacity] = useState(0.7);
+  const [radarLayer, setRadarLayer] = useState<"local" | "national">("local");
+  const onRadarLayerChange = useCallback((l: "local" | "national") => setRadarLayer(l), []);
+
+  const radarWindow = useMemo<[number, number]>(() => {
+    const start = bins[sel[0]]?.start ?? windowStartMs;
+    const end = Math.min(bins[sel[1]]?.end ?? nowMs, Date.now());
+    return [start, end];
+  }, [bins, sel, windowStartMs, nowMs]);
+
+  // The timeline the slider steps through: the zoom's layer, else whichever has frames.
+  const radarTrack = useMemo(() => {
+    const pick = radarLayer === "local" && radar.local.length > 0 ? radar.local : radar.national.length > 0 ? radar.national : radar.local;
+    return pick.filter((f) => f.time >= radarWindow[0] && f.time <= radarWindow[1]);
+  }, [radar.local, radar.national, radarLayer, radarWindow]);
+
+  // Slider index into radarTrack; null = follow the newest frame.
+  const [radarIdx, setRadarIdx] = useState<number | null>(null);
+  useEffect(() => {
+    setRadarIdx(null);
+    setRadarPlaying(false);
+  }, [radarWindow[0], radarWindow[1], radarLayer]);
+  const shownIdx = radarTrack.length === 0 ? 0 : Math.min(radarIdx ?? radarTrack.length - 1, radarTrack.length - 1);
+  const radarTime = radarTrack[shownIdx]?.time ?? null;
+
+  const radarStep = Math.max(1, Math.ceil(radarTrack.length / RADAR_MAX_STEPS));
+  useEffect(() => {
+    if (!radarPlaying || radarTrack.length < 2) return;
+    const id = window.setInterval(() => {
+      setRadarIdx((i) => {
+        const cur = i ?? radarTrack.length - 1;
+        return cur >= radarTrack.length - 1 ? 0 : Math.min(cur + radarStep, radarTrack.length - 1);
+      });
+    }, RADAR_TICK_MS);
+    return () => window.clearInterval(id);
+  }, [radarPlaying, radarTrack.length, radarStep]);
+
+  const localFrame = radarOn && radarTime != null ? radarFrameNear(radar.local, radarTime, "local") : null;
+  const nationalFrame = radarOn && radarTime != null ? radarFrameNear(radar.national, radarTime, "national") : null;
+  const localImg = useRadarImage(agentId, localFrame, radar.state);
+  const nationalImg = useRadarImage(agentId, nationalFrame, radar.state);
+
+  // Keep the next few frames decoding ahead of playback.
+  const prefetchRadar = usePrefetchRadar();
+  useEffect(() => {
+    if (!radarPlaying) return;
+    const ahead: RadarFrame[] = [];
+    for (let k = 1; k <= 4; k++) {
+      const f = radarTrack[(shownIdx + k * radarStep) % radarTrack.length];
+      if (!f) continue;
+      const l = radarFrameNear(radar.local, f.time, "local");
+      const n = radarFrameNear(radar.national, f.time, "national");
+      if (l) ahead.push(l);
+      if (n) ahead.push(n);
+    }
+    prefetchRadar(agentId, ahead, radar.state);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [radarPlaying, shownIdx]);
+
+  const radarRangeKm = radar.state?.local?.range_km ?? 128;
+  const radarOverlay = useMemo<RadarOverlay | null>(() => {
+    if (!hasRadar || !radarOn) return null;
+    return {
+      local: localImg.url && localImg.bounds ? { url: localImg.url, bounds: localImg.bounds } : null,
+      national: nationalImg.url && nationalImg.bounds ? { url: nationalImg.url, bounds: nationalImg.bounds } : null,
+      opacity: radarOpacity,
+      // Local image fills the view from about this zoom (128 km → 8).
+      localMinZoom: Math.round(8 - Math.log2(radarRangeKm / 128)),
+    };
+  }, [hasRadar, radarOn, localImg.url, localImg.bounds, nationalImg.url, nationalImg.bounds, radarOpacity, radarRangeKm]);
+
+  const radarSource =
+    radarLayer === "local" && radar.state?.local
+      ? `${radar.state.local.name} ${radar.state.local.range_km} km`
+      : "National mosaic";
+
   if (cfgLoading || (deviceIds.length > 0 && (tagQuery.isLoading || pulseQuery.isLoading) && withData.length === 0)) {
     return <div style={{ padding: 16, fontSize: 14, color: "var(--muted-foreground)" }}>Loading rainfall data…</div>;
   }
@@ -529,7 +626,28 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
               here.
             </div>
           ) : (
-            <RainfallMap gauges={mapGauges} height={520} />
+            <RainfallMap
+              gauges={mapGauges}
+              height={520}
+              radar={radarOverlay}
+              onRadarLayerChange={onRadarLayerChange}
+            />
+          )}
+          {hasRadar && mapGauges.length > 0 && (
+            <RadarBar
+              enabled={radarOn}
+              onEnabledChange={setRadarOn}
+              playing={radarPlaying}
+              onPlayingChange={setRadarPlaying}
+              frameCount={radarTrack.length}
+              index={shownIdx}
+              onIndexChange={setRadarIdx}
+              time={radarTime}
+              sourceLabel={radarSource}
+              opacity={radarOpacity}
+              onOpacityChange={setRadarOpacity}
+              loading={localImg.isLoading || nationalImg.isLoading}
+            />
           )}
           {/* Legend — the full BOM rainfall-totals scale (amount of rain) */}
           <div style={{ padding: "13px 16px", borderTop: "1px solid var(--border)" }}>

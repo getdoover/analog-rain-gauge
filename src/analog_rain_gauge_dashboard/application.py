@@ -71,11 +71,15 @@ class AnalogRainGaugeDashboardApp(Application):
     # -- radar ---------------------------------------------------------------
 
     def gauge_points(self) -> list[tuple[float, float]]:
-        """(lat, lon) of every located gauge in this dashboard's DEVICE_MAP."""
+        """(lat, lon) of every located gauge in DEVICE_MAP, minus ignored groups."""
         device_map = (self.received_deployment_config or {}).get("DEVICE_MAP") or {}
+        ignored = {str(g.value) for g in (self.config.ignore_groups.value or [])}
         points = []
         for entry in device_map.values():
             if not isinstance(entry, dict):
+                continue
+            group_id = (entry.get("group") or {}).get("id")
+            if group_id is not None and str(group_id) in ignored:
                 continue
             lat, lon = entry.get("latitude"), entry.get("longitude")
             if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and (lat or lon):

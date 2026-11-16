@@ -62,3 +62,38 @@ def test_parse_map():
 def test_centroid():
     assert radar.centroid([]) is None
     assert radar.centroid([(-29.0, 149.0), (-30.0, 150.0)]) == (-29.5, 149.5)
+
+
+DEPLOYED = {
+    "bom_radar": {
+        "host": "ftp.bom.gov.au",
+        "site": "",
+        "range": "128 km",
+        "enabled": True,
+        "national": True,
+        "password": "",
+        "username": "anonymous",
+        "directory": "/anon/gen/radar",
+        "keep_days": 7,
+        "coordinates_directory": "/anon/gen/radar_transparencies/coordinates",
+    },
+    "farm_name": "",
+    "gauge_app_name": "analog_rain_gauge_1",
+    "ignored_groups": ["127188186160990990"],
+    "dv_app_position": 100,
+    "dv_proc_schedules": "rate(10 minutes)",
+    "dv_proc_extended_permissions": {"groups": [], "devices": [], "apps_installed": ["1"]},
+}
+
+
+def test_radar_config_loads_across_warm_invocations():
+    from analog_rain_gauge_dashboard.app_config import AnalogRainGaugeDashboardConfig
+
+    # A warm Lambda builds a fresh config per invocation.
+    for _ in range(2):
+        cfg = AnalogRainGaugeDashboardConfig()
+        cfg._inject_deployment_config(DEPLOYED)
+        assert cfg.radar.enabled.value is True
+        assert cfg.radar.range.value == "128 km"
+        assert float(cfg.radar.keep_days.value) == 7
+        assert [g.value for g in cfg.ignore_groups.value] == ["127188186160990990"]

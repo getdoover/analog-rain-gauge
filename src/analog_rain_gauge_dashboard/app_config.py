@@ -29,17 +29,20 @@ class RadarSettings(config.Object):
         description="Record BOM radar images and show them over the map.",
     )
     site = config.String(
-        "Radar Site",
+        "Radar Sites",
         name="site",
         default=RADAR_DEFAULTS["site"],
-        description="BOM radar ID, e.g. 53 for Moree. Leave blank to use the radar nearest the gauges.",
+        description="BOM radar IDs to combine, comma-separated, e.g. 53, 69, 93 (Moree, Namoi, "
+        "Brewarrina). Where they overlap the strongest reading is shown. Leave blank to use "
+        "only the radar nearest the gauges.",
     )
     range = config.Enum(
         "Radar Range",
         name="range",
         choices=list(RANGES),
         default=RADAR_DEFAULTS["range"],
-        description="Radius of the local radar image. Not every radar publishes 64 km.",
+        description="Radius of each radar's image. Not every radar publishes 64 km; a listed "
+        "radar without this range is skipped.",
     )
     national = config.Boolean(
         "National Mosaic",

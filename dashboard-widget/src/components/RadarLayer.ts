@@ -8,7 +8,8 @@
 import { RADAR_RGBA, invMercY, mercY, sampleGrid, type RadarGrid } from "../lib/radar";
 
 export interface RadarLayerHandle {
-  setGrid(grid: RadarGrid | null): void;
+  /** Radars to composite (strongest wins), and the mosaic for where none covers. */
+  setGrids(sites: RadarGrid[], national: RadarGrid | null): void;
   setOpacity(opacity: number): void;
   remove(): void;
 }
@@ -19,7 +20,8 @@ const MAX_DPR = 2;
 export function createRadarLayer(map: google.maps.Map, maps: typeof google.maps): RadarLayerHandle {
   class RadarOverlay extends maps.OverlayView {
     canvas = document.createElement("canvas");
-    grid: RadarGrid | null = null;
+    sites: RadarGrid[] = [];
+    national: RadarGrid | null = null;
     idleListener: google.maps.MapsEventListener | null = null;
     frame = 0;
 
@@ -48,7 +50,7 @@ export function createRadarLayer(map: google.maps.Map, maps: typeof google.maps)
       const bounds = map.getBounds();
       const div = map.getDiv();
       const c = this.canvas;
-      if (!proj || !bounds || !this.grid) {
+      if (!proj || !bounds || (!this.sites.length && !this.national)) {
         c.width = 0;
         return;
       }
@@ -80,11 +82,18 @@ export function createRadarLayer(map: google.maps.Map, maps: typeof google.maps)
         if (lon > 180) lon -= 360;
         lons[i] = lon;
       }
-      const grid = this.grid;
+      const sites = this.sites, national = this.national, n = sites.length;
       for (let j = 0; j < H; j++) {
         const lat = invMercY(yTop + ((j + 0.5) / H) * (yBottom - yTop));
         for (let i = 0; i < W; i++) {
-          const v = sampleGrid(grid, lons[i], lat);
+          // Strongest reading among the radars covering this point; the
+          // mosaic only where none of them does.
+          let v = -1;
+          for (let s = 0; s < n; s++) {
+            const sv = sampleGrid(sites[s], lons[i], lat);
+            if (sv > v) v = sv;
+          }
+          if (v < 0 && national) v = sampleGrid(national, lons[i], lat);
           if (v <= 0) continue;
           const k = Math.min(255, Math.round((v / 15) * 255)) * 4;
           const a = RADAR_RGBA[k + 3];
@@ -103,9 +112,10 @@ export function createRadarLayer(map: google.maps.Map, maps: typeof google.maps)
   const overlay = new RadarOverlay();
   overlay.setMap(map);
   return {
-    setGrid(grid) {
-      if (overlay.grid === grid) return;
-      overlay.grid = grid;
+    setGrids(sites, national) {
+      if (overlay.sites === sites && overlay.national === national) return;
+      overlay.sites = sites;
+      overlay.national = national;
       overlay.draw();
     },
     setOpacity(opacity) {

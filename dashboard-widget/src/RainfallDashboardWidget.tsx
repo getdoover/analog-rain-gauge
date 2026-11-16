@@ -31,7 +31,7 @@ import {
 import RainfallMap, { type MapGauge, type RadarOverlay } from "./components/RainfallMap";
 import MapTimeSlider from "./components/MapTimeSlider";
 import { frameAt, type RadarFrame } from "./lib/radar";
-import { usePrefetchRadar, useRadarFrames, useRadarGrid } from "./lib/useRadar";
+import { usePrefetchRadar, useRadarFrames, useRadarGrid, useRadarGrids } from "./lib/useRadar";
 import { rainViewerFrameAt, useRainViewerFrames } from "./lib/rainviewer";
 import RainfallTimeline, { type TimelineSeries } from "./components/RainfallTimeline";
 
@@ -67,6 +67,8 @@ interface PulseMessage {
 }
 
 const RADAR_OPACITY = 0.85;
+// RainViewer tiles for the last ~2 hours instead of our own BOM composite.
+const USE_RAINVIEWER = false;
 // Slider step.
 const SLIDER_STEP_MS = 5 * 60_000;
 
@@ -533,24 +535,27 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
     [rows, mapTotals],
   );
 
-  // BOM radar — frames the processor stored in `bom_radar`. The map shows the
-  // local site zoomed in and the national mosaic zoomed out.
+  // BOM radar — frames the processor stored in `bom_radar`: every configured
+  // radar, composited on the map (strongest reading wherever they overlap),
+  // and the national mosaic for zoomed-out views and outside their coverage.
   const radar = useRadarFrames(agentId, windowStartMs);
-  const hasRadar = !!(radar.state?.local || radar.state?.national);
+  const hasRadar = radar.sites.length > 0 || !!radar.state?.national;
   const [radarLayer, setRadarLayer] = useState<"local" | "national">("local");
   const onRadarLayerChange = useCallback((l: "local" | "national") => setRadarLayer(l), []);
 
   // Follow the slider while it's dragged, but at most ~7 frames a second.
   const radarTime = useThrottled(mapTime, 150);
-  const localFrame = hasRadar ? radarFrameNear(radar.local, radarTime, "local") : null;
+  const siteFrames = useMemo(
+    () => radar.sites.map((s) => radarFrameNear(radar.byProduct.get(s.product) ?? [], radarTime, "local")),
+    [radar.sites, radar.byProduct, radarTime],
+  );
   const nationalFrame = hasRadar ? radarFrameNear(radar.national, radarTime, "national") : null;
-  // RainViewer for the last ~2 hours (smoother, pre-processed tiles); the
-  // stored BOM frames for anything older.
-  const { data: rvFrames } = useRainViewerFrames();
-  const rvFrame = rainViewerFrameAt(rvFrames, radarTime);
+  // Optional RainViewer tiles for the last ~2 hours (off: our own composite is used).
+  const { data: rvFrames } = useRainViewerFrames(USE_RAINVIEWER);
+  const rvFrame = USE_RAINVIEWER ? rainViewerFrameAt(rvFrames, radarTime) : null;
   const rvTemplates = useMemo(() => (rvFrames ?? []).map((f) => f.template), [rvFrames]);
 
-  const localGrid = useRadarGrid(agentId, rvFrame ? null : localFrame, radar.state);
+  const siteGrids = useRadarGrids(agentId, rvFrame ? [] : siteFrames, radar.state);
   const nationalGrid = useRadarGrid(agentId, rvFrame ? null : nationalFrame, radar.state);
 
   // Warm the frames either side of the slider so scrubbing doesn't wait on downloads.
@@ -559,39 +564,50 @@ function RainfallDashboardWidgetInner({ uiElement }: { uiElement: UiRemoteCompon
     if (rvFrame) return; // the RainViewer layer preloads its own tiles
     const near = (frames: RadarFrame[], f: RadarFrame | null) => {
       const i = f ? frames.indexOf(f) : -1;
-      return i < 0 ? [] : frames.slice(Math.max(0, i - 3), i + 4);
+      return i < 0 ? [] : frames.slice(Math.max(0, i - 2), i + 3);
     };
-    prefetchRadar(agentId, [...near(radar.local, localFrame), ...near(radar.national, nationalFrame)], radar.state);
+    prefetchRadar(
+      agentId,
+      [
+        ...radar.sites.flatMap((s, k) => near(radar.byProduct.get(s.product) ?? [], siteFrames[k])),
+        ...near(radar.national, nationalFrame),
+      ],
+      radar.state,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localFrame?.id, nationalFrame?.id, rvFrame?.time]);
+  }, [siteFrames.map((f) => f?.id).join(","), nationalFrame?.id, rvFrame?.time]);
 
-  const radarRangeKm = radar.state?.local?.range_km ?? 128;
+  const radarRangeKm = radar.sites[0]?.range_km ?? 128;
   const radarOverlay = useMemo<RadarOverlay | null>(() => {
     if (!hasRadar && !rvFrame) return null;
     return {
       tiles: rvFrame?.template ?? null,
       tilePreload: rvTemplates,
-      local: localGrid,
+      sites: siteGrids,
       national: nationalGrid,
       opacity: RADAR_OPACITY,
-      // Local image fills the view from about this zoom (128 km → 8).
+      // A radar's image fills the view from about this zoom (128 km → 8).
       localMinZoom: Math.round(8 - Math.log2(radarRangeKm / 128)),
     };
-  }, [hasRadar, rvFrame, rvTemplates, localGrid, nationalGrid, radarRangeKm]);
+  }, [hasRadar, rvFrame, rvTemplates, siteGrids, nationalGrid, radarRangeKm]);
 
-  const shownFrame = radarLayer === "local" ? localFrame ?? nationalFrame : nationalFrame ?? localFrame;
+  const shownSites = radar.sites.filter((_, k) => siteFrames[k]);
+  const shownTime =
+    radarLayer === "local" && shownSites.length
+      ? Math.max(...siteFrames.filter((f): f is RadarFrame => !!f).map((f) => f.time))
+      : nationalFrame?.time ?? null;
   const radarNote = rvFrame
     ? `Radar ${dayjs(rvFrame.time).format("h:mm a")}`
     : !hasRadar
     ? null
-    : shownFrame
-      ? `Radar ${dayjs(shownFrame.time).format("h:mm a")} · ${
-          shownFrame.kind === "local" && radar.state?.local ? radar.state.local.name : "national"
+    : shownTime != null
+      ? `Radar ${dayjs(shownTime).format("h:mm a")} · ${
+          radarLayer === "local" && shownSites.length ? shownSites.map((s) => s.name.replace(/ \(.*\)$/, "")).join(", ") : "national"
         }`
       : "No radar at this time";
   const radarSource = rvFrame
     ? { label: "RainViewer", href: "https://www.rainviewer.com/", title: "Radar data © RainViewer (rainviewer.com)" }
-    : hasRadar && shownFrame
+    : hasRadar && shownTime != null
       ? { label: "BOM", href: "https://www.bom.gov.au/", title: "Radar images © Commonwealth of Australia, Bureau of Meteorology" }
       : null;
 

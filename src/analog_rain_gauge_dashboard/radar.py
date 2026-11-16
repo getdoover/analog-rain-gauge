@@ -129,6 +129,34 @@ def parse_frames(names: list[str]) -> dict[str, list[Frame]]:
     return out
 
 
+# Frames are stored one message per slot: every radar's image whose time falls
+# in the same 5 minutes travels together, so a week of several radars stays a
+# few thousand messages.
+SLOT_MS = 5 * 60_000
+
+
+def slot_of(time_ms: int) -> int:
+    return time_ms - time_ms % SLOT_MS
+
+
+def group_by_slot(items: list[tuple[str, Frame]]) -> dict[int, list[tuple[str, Frame]]]:
+    """{slot start ms: [(kind, frame), ...]}, oldest slot first."""
+    out: dict[int, list[tuple[str, Frame]]] = {}
+    for kind, frame in sorted(items, key=lambda kf: kf[1].time_ms):
+        out.setdefault(slot_of(frame.time_ms), []).append((kind, frame))
+    return out
+
+
+def parse_site_ids(text: str) -> list[int]:
+    """'53, 69 IDR93' -> [53, 69, 93]; raises ValueError on anything else."""
+    ids = []
+    for part in text.replace(";", ",").replace(" ", ",").split(","):
+        part = part.strip().upper().removeprefix("IDR")
+        if part:
+            ids.append(int(part))
+    return list(dict.fromkeys(ids))
+
+
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lon2 - lon1)

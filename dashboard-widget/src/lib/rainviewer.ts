@@ -26,9 +26,10 @@ interface WeatherMaps {
   radar?: { past?: { time: number; path: string }[] };
 }
 
-export function useRainViewerFrames() {
+export function useRainViewerFrames(enabled = true) {
   return useQuery({
     queryKey: ["rainviewer-frames"],
+    enabled,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
     queryFn: async (): Promise<RainViewerFrame[]> => {

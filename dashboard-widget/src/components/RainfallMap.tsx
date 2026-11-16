@@ -28,7 +28,8 @@ export interface RadarOverlay {
   tiles: string | null;
   /** Other RainViewer frames whose tiles to load ahead, so scrubbing is instant. */
   tilePreload: string[];
-  local: RadarGrid | null;
+  /** One grid per configured radar, composited (strongest reading wins). */
+  sites: RadarGrid[];
   national: RadarGrid | null;
   opacity: number; // 0..1
   /** Zoom at or above which the local radar is shown instead of the national mosaic. */
@@ -44,6 +45,8 @@ interface RainfallMapProps {
   /** Drawn over the map (e.g. the time slider). */
   children?: React.ReactNode;
 }
+
+const EMPTY_GRIDS: RadarGrid[] = [];
 
 // Gauge names only once zoomed in far enough that they don't pile up.
 const NAME_MIN_ZOOM = 11;
@@ -100,11 +103,10 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
     onRadarLayerChange?.(layer);
   }, [layer, onRadarLayerChange]);
   const tiles = radar?.tiles ?? null;
-  const grid = radar && !tiles
-    ? layer === "local"
-      ? radar.local ?? radar.national
-      : radar.national ?? radar.local
-    : null;
+  // Zoomed in: the radars, with the national mosaic outside their coverage.
+  // Zoomed out: the national mosaic (or the radars if that's all there is).
+  const sites = radar && !tiles && (layer === "local" || !radar.national) ? radar.sites : EMPTY_GRIDS;
+  const national = radar && !tiles ? radar.national : null;
 
   useEffect(() => {
     const map = mapRef.current;
@@ -112,12 +114,12 @@ export default function RainfallMap({ gauges, height = 540, radar, onRadarLayerC
     if (!mapReady || !map || !maps) return;
     radarLayerRef.current ??= createRadarLayer(map as unknown as google.maps.Map, maps);
     radarLayerRef.current.setOpacity(radar?.opacity ?? 0.75);
-    radarLayerRef.current.setGrid(grid);
+    radarLayerRef.current.setGrids(sites, national);
     tileLayerRef.current ??= createRainViewerLayer(map as unknown as google.maps.Map, maps);
     tileLayerRef.current.setOpacity(radar?.opacity ?? 0.75);
     tileLayerRef.current.setTemplate(tiles);
     tileLayerRef.current.setPreload(tiles ? radar?.tilePreload ?? [] : []);
-  }, [mapReady, grid, tiles, radar?.tilePreload, radar?.opacity]);
+  }, [mapReady, sites, national, tiles, radar?.tilePreload, radar?.opacity]);
 
   useEffect(
     () => () => {

@@ -97,3 +97,27 @@ def test_radar_config_loads_across_warm_invocations():
         assert cfg.radar.range.value == "128 km"
         assert float(cfg.radar.keep_days.value) == 7
         assert [g.value for g in cfg.ignore_groups.value] == ["127188186160990990"]
+
+
+def test_parse_site_ids():
+    assert radar.parse_site_ids("53, 69 IDR93") == [53, 69, 93]
+    assert radar.parse_site_ids("53;53") == [53]
+    assert radar.parse_site_ids("") == []
+
+
+def test_group_by_slot_bundles_radars_in_the_same_5_minutes():
+    frames = radar.parse_frames(
+        [
+            "IDR533.T.202611160104.png",
+            "IDR693.T.202611160101.png",
+            "IDR533.T.202611160109.png",
+            "IDR00004.T.202611160100.png",
+        ]
+    )
+    items = [("local", f) for p in ("IDR533", "IDR693") for f in frames[p]]
+    items += [("national", f) for f in frames["IDR00004"]]
+    slots = radar.group_by_slot(items)
+    first, second = list(slots)
+    assert second - first == radar.SLOT_MS
+    assert sorted(f.product for _, f in slots[first]) == ["IDR00004", "IDR533", "IDR693"]
+    assert [f.filename for _, f in slots[second]] == ["IDR533.T.202611160109.png"]

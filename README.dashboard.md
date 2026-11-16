@@ -12,9 +12,9 @@ been granted access to into a single view:
   readings are the source of truth).
 - **Per-gauge table** — rain total, last-seen and reporting status per gauge.
 - **Rainfall over time** — farm-average daily rainfall across the window.
-- **Radar** — rain radar over the map: RainViewer's composite for the last
-  ~2 hours, and the dashboard's stored BOM frames (local site zoomed in,
-  national mosaic zoomed out) for older times. A time slider on the map steps
+- **Radar** — rain radar over the map, composited from the BOM radars listed
+  in config (strongest reading where they overlap) when zoomed in, and BOM's
+  national mosaic when zoomed out or outside their coverage. A time slider on the map steps
   through the selected window, moving the radar and each gauge's total (rain
   from the window start up to the slider) together.
 
@@ -47,7 +47,7 @@ that long. Images are 3–7 KB each, about 430 a day.
 | Setting | Description | Default |
 |---------|-------------|---------|
 | **Show Radar** | Record radar and show it on the map | On |
-| **Radar Site** | BOM radar ID (e.g. `53` for Moree). Blank picks the radar nearest the gauges that publishes the chosen range | Blank |
+| **Radar Sites** | BOM radar IDs to combine, comma-separated (e.g. `53, 69, 93` for Moree, Namoi, Brewarrina). Blank uses only the radar nearest the gauges that publishes the chosen range | Blank |
 | **Radar Range** | Radius of the local image: 512, 256, 128 or 64 km (not every radar has 64 km) | 128 km |
 | **National Mosaic** | Also record `IDR00004`, shown when zoomed out | On |
 | **FTP Host / Username / Password** | BOM's anonymous feed by default; set for a Registered User feed | `ftp.bom.gov.au`, anonymous |
@@ -67,12 +67,17 @@ The anonymous FTP feed is published for personal use under BOM's copyright
 notice; showing it to customers needs BOM's Registered User service, which the
 FTP settings above support.
 
-### RainViewer (recent radar)
+### Compositing radars
 
-For the last ~2 hours the map uses [RainViewer](https://www.rainviewer.com/api/weather-maps-api.html)
-tiles, loaded straight from RainViewer by the browser: a smoothed composite of
-the Australian radars that looks far better than BOM's FTP images. The free
-API serves zoom 7 at most (deeper zooms stretch those tiles), 10-minute frames,
-one colour scheme and no forecast. Older times on the slider fall back to the
-stored BOM frames. The free API is for a non-commercial trial; check
-RainViewer's terms before relying on it for customers.
+Each 5-minute slot is stored as one message holding every listed radar's image
+for that slot (plus the national mosaic), so a week of several radars stays
+around 2,000 messages. On the map, each screen pixel takes the strongest
+reading of the listed radars that cover it (inside each radar's range circle),
+falling back to the national mosaic where none does. Combining radars fills in
+where one radar's beam is weak or blocked; BOM's images are lightly smoothed
+and their 15 colour bands blended into a gradient. This is what makes
+third-party radar maps (e.g. RainViewer, which also works from BOM's public
+images) look better than a single BOM image.
+
+The widget can still draw RainViewer tiles for the last ~2 hours
+(`USE_RAINVIEWER` in `RainfallDashboardWidget.tsx`, off by default).
